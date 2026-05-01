@@ -40,11 +40,7 @@ jobs:
     - name: Free space
       uses: Darks41/free-disk-space@ubuntu-24.04
       with:
-        # this might remove tools that are actually needed,
-        # if set to "true" but frees about 6 GB
         tool-cache: true
-        # all of these default to true, but feel free to set to
-        # "false" if necessary for your workflow
         android: true
         dotnet: true
         haskell: true
@@ -55,7 +51,6 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # Ubuntu 24.04 的软件源在 sources.list.d 中，不能全部删除
         if [[ "$(lsb_release -rs)" == "24.04" ]]; then
         # 仅删除 GitHub Actions 额外加入的非必要源，保留 ubuntu.sources
           sudo find /etc/apt/sources.list.d -type f ! -name 'ubuntu.sources' -delete
