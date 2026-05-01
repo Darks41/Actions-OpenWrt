@@ -38,7 +38,7 @@ jobs:
       uses: actions/checkout@main
 
     - name: Free space
-      uses: jlumbroso/free-disk-space@main
+      uses: Darks41/free-disk-space@ubuntu-24.04
       with:
         # this might remove tools that are actually needed,
         # if set to "true" but frees about 6 GB
