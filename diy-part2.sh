@@ -20,5 +20,5 @@
 #sed -i 's/OpenWrt/P3TERX-Router/g' package/base-files/files/bin/config_generate
 
 # 查找所有 package 目录下的 Makefile，并将其中的 C++11 强制替换为 C++17
-find package/ -type f -name Makefile -exec sed -i 's/-std=c++11/-std=c++17/g' {} +
-find feeds/ -type f -name Makefile -exec sed -i 's/-std=c++11/-std=c++17/g' {} +
+# find package/ -type f -name Makefile -exec sed -i 's/-std=c++11/-std=c++17/g' {} +
+# find feeds/ -type f -name Makefile -exec sed -i 's/-std=c++11/-std=c++17/g' {} +
