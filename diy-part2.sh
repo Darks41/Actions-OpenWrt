@@ -19,6 +19,12 @@
 # Modify hostname
 #sed -i 's/OpenWrt/P3TERX-Router/g' package/base-files/files/bin/config_generate
 
-## 在 netdata 的 Makefile 中强制添加 C++17 编译标准
-sed -i '/TARGET_CFLAGS :=/a TARGET_CXXFLAGS += -std=c++17' feeds/packages/admin/netdata/Makefile
+#  在 netdata 的 Makefile 中强制添加 C++17 编译标准
+#sed -i '/TARGET_CFLAGS :=/a TARGET_CXXFLAGS += -std=c++17' feeds/packages/admin/netdata/Makefile
 
+# 移除旧版本 netdata
+rm -rf feeds/packages/admin/netdata
+# 临时克隆官方最新 packages 仓库，并提取最新版 netdata
+git clone --depth=1 https://github.com/openwrt/packages.git temp_packages
+cp -r temp_packages/admin/netdata feeds/packages/admin/netdata
+rm -rf temp_packages
