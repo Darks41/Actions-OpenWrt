@@ -19,6 +19,6 @@
 # Modify hostname
 #sed -i 's/OpenWrt/P3TERX-Router/g' package/base-files/files/bin/config_generate
 
-# 查找所有 package 目录下的 Makefile，并将其中的 C++11 强制替换为 C++17
-find package/ -type f -name Makefile -exec sed -i 's/-std=c++11/-std=c++17/g' {} +
-find feeds/ -type f -name Makefile -exec sed -i 's/-std=c++11/-std=c++17/g' {} +
+## 在 netdata 的 Makefile 中强制添加 C++17 编译标准
+sed -i '/TARGET_CFLAGS :=/a TARGET_CXXFLAGS += -std=c++17' feeds/packages/admin/netdata/Makefile
+
