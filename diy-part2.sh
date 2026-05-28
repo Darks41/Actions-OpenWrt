@@ -21,7 +21,7 @@
 
 #  在 netdata 的 Makefile 中强制添加 C++17 编译标准
 #sed -i '/TARGET_CFLAGS :=/a TARGET_CXXFLAGS += -std=c++17' feeds/packages/admin/netdata/Makefile
-sed -i '/^TARGET_CFLAGS :=/a\TARGET_CXXFLAGS += -std=c++14' feeds/packages/admin/netdata/Makefile
+sed -i '/^TARGET_CFLAGS :=/a\TARGET_CXXFLAGS += -std=c++15' feeds/packages/admin/netdata/Makefile
 
 # 移除旧版本 netdata
 #rm -rf feeds/packages/admin/netdata
