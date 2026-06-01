@@ -1,30 +1,43 @@
 #!/bin/bash
+# =============================================
+# diy-part2.sh - OpenWRT build customization
+# 修复 netdata v1.38.1 C++ 标准冲突
+# =============================================
+# 问题：
+#   netdata aclk/schema-wrappers/Makefile.in 硬编码 -std=c++11
+#   新版 protobuf/abseil-cpp 要求 C++14+，导致编译失败
+#   #error "C++ versions less than C++14 are not supported."
 #
-# https://github.com/P3TERX/Actions-OpenWrt
-# File name: diy-part2.sh
-# Description: OpenWrt DIY script part 2 (After Update feeds)
-#
-# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
+# 修复：
+#   在 Build/Configure 完成后，sed 替换生成的 Makefile 中的 -std=c++11
+# =============================================
 
-# Modify default IP
-#sed -i 's/192.168.1.1/192.168.50.5/g' package/base-files/files/bin/config_generate
+NETDATA_MAKEFILE="feeds/packages/admin/netdata/Makefile"
+[ -f "package/feeds/packages/netdata/Makefile" ] && NETDATA_MAKEFILE="package/feeds/packages/netdata/Makefile"
 
-# Modify default theme
-#sed -i 's/luci-theme-bootstrap/luci-theme-argon/g' feeds/luci/collections/luci/Makefile
+if [ ! -f "$NETDATA_MAKEFILE" ]; then
+  echo "[DIY] netdata Makefile not found, skipping"
+  exit 0
+fi
 
-# Modify hostname
-#sed -i 's/OpenWrt/P3TERX-Router/g' package/base-files/files/bin/config_generate
+echo "[DIY] Patching $NETDATA_MAKEFILE ..."
 
-# 移除旧版本 netdata
-#rm -rf feeds/packages/admin/netdata
-# 临时克隆官方最新 packages 仓库，并提取最新版 netdata
-#git clone --depth=1 https://github.com/openwrt/packages.git temp_packages
-#cp -r temp_packages/admin/netdata feeds/packages/admin/netdata
-#rm -rf temp_packages
+# 在文件末尾插入 Build/Configure 覆写
+cat >> "$NETDATA_MAKEFILE" << 'EOF'
 
-# 在 netdata 的 Makefile 中强制添加 C++17 编译标准（兼容新版 protobuf）
-sed -i '/^TARGET_CFLAGS :=.*-std=gnu17$/a\TARGET_CXXFLAGS := $(filter-out -std=%,$(TARGET_CXXFLAGS)) -std=gnu++17' feeds/packages/admin/netdata/Makefile
+# === fix-netdata-cxx11 ===
+# netdata 源码中 aclk/schema-wrappers/Makefile.am 硬编码 -std=c++11
+# 但新版 protobuf + abseil-cpp 要求 C++14+，导致编译报错：
+#   error: #error "C++ versions less than C++14 are not supported."
+# 这里在 configure 后将生成的 Makefile 中的 -std=c++11 替换为 -std=c++17
+define Build/Configure
+	$(call Build/Configure/Default)
+	sed -i 's|-std=c++11|-std=c++17|g' \
+		$(PKG_BUILD_DIR)/aclk/schema-wrappers/Makefile
+	sed -i 's|-std=c++11|-std=c++17|g' \
+		$(PKG_BUILD_DIR)/aclk/Makefile
+endef
+# =========================
+EOF
+
+echo "[DIY] Done. Rebuild with: make package/feeds/packages/netdata/compile V=s"
