@@ -20,8 +20,8 @@
 #sed -i 's/OpenWrt/P3TERX-Router/g' package/base-files/files/bin/config_generate
 
 # 移除旧版本 netdata
-rm -rf feeds/packages/admin/netdata
+#rm -rf feeds/packages/admin/netdata
 # 临时克隆官方最新 packages 仓库，并提取最新版 netdata
-git clone --depth=1 https://github.com/openwrt/packages.git temp_packages
-cp -r temp_packages/admin/netdata feeds/packages/admin/netdata
-rm -rf temp_packages
+#git clone --depth=1 https://github.com/openwrt/packages.git temp_packages
+#cp -r temp_packages/admin/netdata feeds/packages/admin/netdata
+#rm -rf temp_packages
