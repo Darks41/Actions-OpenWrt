@@ -27,4 +27,4 @@
 #rm -rf temp_packages
 
 # 移除自带的PW库
-rm -rf feeds/applications/luci-app-passwall
+rm -rf feeds/luci/applications/luci-app-passwall
