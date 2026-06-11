@@ -25,3 +25,6 @@
 #git clone --depth=1 https://github.com/openwrt/packages.git temp_packages
 #cp -r temp_packages/admin/netdata feeds/packages/admin/netdata
 #rm -rf temp_packages
+
+# 移除自带的PW库
+rm -rf feeds/applications/luci-app-passwall
