@@ -17,8 +17,8 @@ on:
   workflow_dispatch:
 
 env:
-  REPO_URL: https://github.com/BeeconMini/immortalwrt
-  REPO_BRANCH: 25.12.1
+  REPO_URL: https://github.com/Darks41/immortalwrt-25.12-ac5s
+  REPO_BRANCH: main
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: ac5s.config
   DIY_P1_SH: diy-part1.sh
