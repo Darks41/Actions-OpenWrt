@@ -99,7 +99,6 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
         sed -i 's/--set=llvm.download-ci-llvm=true/--set=llvm.download-ci-llvm=false/' feeds/package/lang/rust/Makefile
 
-
     - name: Upload dl directory
       uses: actions/upload-artifact@main
       if: steps.package.outputs.status == 'success' && env.UPLOAD_DL_DIR == 'true'
