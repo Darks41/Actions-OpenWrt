@@ -87,6 +87,7 @@ jobs:
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
+        sed -i 's/--set=llvm.download-ci-llvm=true \\/--set=llvm.download-ci-llvm=false \\/' /package/feeds/packages/rust/Makefile
 
     - name: Download package
       id: package
@@ -97,7 +98,6 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
         echo "status=success" >> $GITHUB_OUTPUT
-        sed -i 's/--set=llvm.download-ci-llvm=true \\/--set=llvm.download-ci-llvm=false \\/' ./package/feeds/packages/lang/rust/Makefile
 
     - name: Upload dl directory
       uses: actions/upload-artifact@main
