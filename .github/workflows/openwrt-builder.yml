@@ -20,7 +20,7 @@ env:
   REPO_URL: https://github.com/frank-w/openwrt
   REPO_BRANCH: R4Pro_4e
   #FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: ac5s.config
+  CONFIG_FILE: r4pro.config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   UPLOAD_DL_DIR: false
