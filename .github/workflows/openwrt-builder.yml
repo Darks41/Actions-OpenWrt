@@ -18,7 +18,7 @@ on:
 
 env:
   REPO_URL: https://github.com/frank-w/openwrt
-  REPO_BRANCH: R4Pro_PR9
+  REPO_BRANCH: R4Pro_4e
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: r4pro.config
   DIY_P1_SH: diy-part1.sh
