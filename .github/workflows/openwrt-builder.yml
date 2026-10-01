@@ -56,6 +56,11 @@ env:
   # Optional: add a `CACHE_TOKEN` repo secret (classic PAT, `repo` scope) if
   # the default GITHUB_TOKEN is not allowed to write. Falls back to GITHUB_TOKEN.
   CACHE_TOKEN: ${{ secrets.CACHE_TOKEN || secrets.GITHUB_TOKEN }}
+  # Force gh to act on *this* repository. Without it gh resolves the repository
+  # from the git remote of the current directory, and the two cache steps run
+  # inside /workdir/openwrt, whose remote is immortalwrt/immortalwrt
+  # ("HTTP 403: Resource not accessible by integration").
+  GH_REPO: ${{ github.repository }}
 
 jobs:
   build:
