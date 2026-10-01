@@ -35,11 +35,17 @@ itself**, so no third-party cache service is involved:
 - Both caches are split into parts (1800M each, below GitHub's 2 GiB/asset limit)
   and guarded by a manifest asset (`dl.manifest` / `ccache.manifest`). Parts are
   uploaded first and the manifest last, so a half-finished upload can never be
-  restored; parts of older revisions are deleted afterwards.
+  restored, and the parts of the previous revision are deleted right afterwards:
+  **exactly one revision of each cache is ever kept.**
 - `dl/` is re-uploaded only when its contents change: `dl.manifest` holds a hash of
   the file list, and an unchanged `dl/` skips the upload entirely.
 - Compiler caching itself is enabled by `CONFIG_DEVEL=y` and `CONFIG_CCACHE=y` in
-  the `.config` file, with `CCACHE_MAX_SIZE` (2G) capping the directory.
+  the `.config` file, with `CCACHE_MAX_SIZE` (6G) capping the directory.
+- `ccache.manifest` also records a **platform fingerprint** — target architecture,
+  GCC version and C library. A cache built for a different architecture or
+  toolchain is refused and the build starts cold, instead of restoring objects it
+  could never use. Changing the device while staying on the same architecture
+  keeps the cache.
 - Both caches are switched by the `CACHE_DL` / `CACHE_CCACHE` variables at the top
   of the workflow.
 
