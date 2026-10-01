@@ -129,18 +129,22 @@ jobs:
         GH_TOKEN: ${{ env.CACHE_TOKEN }}
       run: |
         set -e
-        if ! gh release view "$CCACHE_CACHE_TAG" >/dev/null 2>&1; then
-          echo "No '$CCACHE_CACHE_TAG' Release yet; starting cold."
-          exit 0
-        fi
         # A ccache is only meaningful for the platform it was built on. The
         # fingerprint covers the target architecture, the compiler and the C
         # library: changing the device while staying on the same architecture
         # keeps reusing the cache (ccache keys already include every compiler
         # flag), while a real architecture or toolchain change starts cold
         # instead of restoring objects that can never be used.
+        #
+        # Computed here, before the build runs defconfig and rewrites .config,
+        # and exported so the save step stores exactly this value.
         FP="$(grep -E '^CONFIG_(TARGET_ARCH_PACKAGES|GCC_VERSION|LIBC|LIBC_VERSION|ARCH)=' .config | LC_ALL=C sort | sha256sum | cut -c1-8)"
         echo "Platform fingerprint: $FP"
+        echo "PLATFORM_FP=$FP" >> "$GITHUB_ENV"
+        if ! gh release view "$CCACHE_CACHE_TAG" >/dev/null 2>&1; then
+          echo "No '$CCACHE_CACHE_TAG' Release yet; starting cold."
+          exit 0
+        fi
         rm -rf /tmp/ccache-manifest && mkdir -p /tmp/ccache-manifest
         gh release download "$CCACHE_CACHE_TAG" --dir /tmp/ccache-manifest --pattern 'ccache.manifest' --clobber 2>/dev/null || true
         MAN="$(cat /tmp/ccache-manifest/ccache.manifest 2>/dev/null || true)"
@@ -272,6 +276,10 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
+        # ccache is not configured by the OpenWrt build, and CCACHE_MAX_SIZE is
+        # not a variable ccache reads: without this call the limit stays whatever
+        # the restored .ccache/ccache.conf said.
+        ccache -d /workdir/openwrt/.ccache -M "$CCACHE_MAX_SIZE"
         make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
@@ -308,9 +316,14 @@ jobs:
           exit 0
         fi
         HASH="$(sha256sum /tmp/ccache.tar.zst | cut -c1-16)"
-        # Same fingerprint as the restore step; stored next to the hash so a
-        # build on another platform refuses this cache instead of restoring it.
-        FP="$(grep -E '^CONFIG_(TARGET_ARCH_PACKAGES|GCC_VERSION|LIBC|LIBC_VERSION|ARCH)=' .config | LC_ALL=C sort | sha256sum | cut -c1-8)"
+        # Same fingerprint as the restore step, which computed it before the
+        # build rewrote .config; stored next to the hash so a build on another
+        # platform refuses this cache instead of restoring it.
+        FP="${PLATFORM_FP:-}"
+        if [ -z "$FP" ]; then
+          FP="$(grep -E '^CONFIG_(TARGET_ARCH_PACKAGES|GCC_VERSION|LIBC|LIBC_VERSION|ARCH)=' .config | LC_ALL=C sort | sha256sum | cut -c1-8)"
+          echo "::warning::PLATFORM_FP was not exported by the restore step; recomputed as $FP"
+        fi
         echo ".ccache manifest: platform $FP, hash $HASH"
         gh release view "$CCACHE_CACHE_TAG" >/dev/null 2>&1 || \
           gh release create "$CCACHE_CACHE_TAG" --title "ccache cache" \
