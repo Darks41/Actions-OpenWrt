@@ -119,8 +119,13 @@ jobs:
           echo "Restoring .ccache from branch '$CCACHE_CACHE_BRANCH' ..."
           cat ccache-cache/ccache.tar.zst.part-* > /tmp/ccache.tar.zst
           mkdir -p /workdir/openwrt/.ccache
-          tar -I zstd -xf /tmp/ccache.tar.zst -C /workdir/openwrt
-          du -sh /workdir/openwrt/.ccache
+          if tar -I zstd -xf /tmp/ccache.tar.zst -C /workdir/openwrt; then
+            du -sh /workdir/openwrt/.ccache
+          else
+            echo "::warning::ccache archive is unreadable; continuing with a cold cache"
+            rm -rf /workdir/openwrt/.ccache
+            mkdir -p /workdir/openwrt/.ccache
+          fi
         else
           echo "No ccache cache on branch '$CCACHE_CACHE_BRANCH'; starting cold."
         fi
@@ -167,10 +172,18 @@ jobs:
         fi
         echo "Restoring dl/ for manifest '$HASH' ..."
         rm -rf /tmp/dl-dist && mkdir -p /tmp/dl-dist
-        gh release download "$DL_CACHE_TAG" --dir /tmp/dl-dist --pattern "dl-${HASH}.tar.zst.part-*" --clobber
+        gh release download "$DL_CACHE_TAG" --dir /tmp/dl-dist --pattern "dl-${HASH}.tar.zst.part-*" --clobber || true
+        if ! ls /tmp/dl-dist/dl-${HASH}.tar.zst.part-* >/dev/null 2>&1; then
+          echo "::warning::manifest '$HASH' has no matching parts; starting cold."
+          exit 0
+        fi
         cat /tmp/dl-dist/dl-${HASH}.tar.zst.part-* > /tmp/dl.tar.zst
-        tar -I zstd -xf /tmp/dl.tar.zst -C .
-        echo "dl/ restored: $(du -sh dl | cut -f1), $(find dl -maxdepth 1 -type f | wc -l) files"
+        if ! tar -I zstd -xf /tmp/dl.tar.zst -C .; then
+          echo "::warning::dl archive is unreadable; starting cold."
+          rm -rf dl && mkdir -p dl
+          exit 0
+        fi
+        echo "dl/ restored: $(du -sh dl | cut -f1), $(find dl -type f | wc -l) files"
 
     - name: Download package
       id: package
@@ -246,8 +259,10 @@ jobs:
       run: ccache -d /workdir/openwrt/.ccache -s || true
 
     - name: Save ccache
-      # Run even when the compile failed: a partial cache still helps next time.
-      if: always() && env.CACHE_CCACHE == 'true'
+      # Run even when the compile failed (a partial cache still helps next time),
+      # but never when the compile never started: .ccache would be empty and the
+      # force-push below would replace a good cache with nothing.
+      if: always() && env.CACHE_CCACHE == 'true' && steps.compile.outcome != 'skipped'
       env:
         GH_TOKEN: ${{ env.CACHE_TOKEN }}
       run: |
@@ -260,6 +275,13 @@ jobs:
         rm -f /tmp/ccache.tar.zst
         tar -I 'zstd -1 -T0' -cf /tmp/ccache.tar.zst -C /workdir/openwrt .ccache
         ls -lh /tmp/ccache.tar.zst
+        # A real OpenWrt ccache is hundreds of MiB; anything tiny means we are
+        # about to overwrite a good cache with garbage, so keep the old one.
+        SIZE=$(stat -c%s /tmp/ccache.tar.zst)
+        if [ "$SIZE" -lt 1048576 ]; then
+          echo "ccache archive is only $SIZE bytes; keeping the existing cache."
+          exit 0
+        fi
         rm -rf /tmp/ccache-branch && mkdir -p /tmp/ccache-branch
         split -b "$CACHE_PART_SIZE_CCACHE" -d -a 3 /tmp/ccache.tar.zst /tmp/ccache-branch/ccache.tar.zst.part-
         ls -lh /tmp/ccache-branch
