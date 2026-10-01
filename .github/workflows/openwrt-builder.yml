@@ -16,6 +16,16 @@ on:
   repository_dispatch:
   workflow_dispatch:
 
+# The cache steps create/update two Release objects (dl + ccache), so Contents
+# must be writable.
+permissions:
+  contents: write
+
+# Never let two builds rewrite the shared caches at the same time.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REPO_URL: https://github.com/Darks41/immortalwrt-25.12-ac5s
   REPO_BRANCH: 6.12
@@ -28,6 +38,30 @@ env:
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: false
   TZ: Asia/Shanghai
+
+  # ===== Build cache =====================================================
+  # Both caches are split assets of their own (draft) Release, each guarded by
+  # a manifest asset so a half-finished upload can never be restored. dl/ is
+  # keyed by its content hash, so an unchanged dl/ is never re-uploaded.
+  # Releases are used instead of actions/cache because the free-tier cache is
+  # capped at 10 GB per repo and expires after 7 days without access, while
+  # Release assets have no such expiry.
+  CACHE_DL: true                 # store dl/ in the Release below
+  DL_CACHE_TAG: dl-cache-ac5s-6.12         # Release tag that holds the dl/ cache
+  DL_CACHE_PART_SIZE: 1800M      # must stay below GitHub's 2 GiB/asset limit
+  CACHE_CCACHE: true             # store .ccache in the Release below
+  CCACHE_CACHE_TAG: ccache-cache-ac5s-6.12 # Release tag that holds the .ccache cache
+  CCACHE_MAX_SIZE: 2G            # cap for the .ccache directory
+  CCACHE_DIR: /workdir/openwrt/.ccache
+  CCACHE_CACHE_PART_SIZE: 1800M  # must stay below GitHub's 2 GiB/asset limit
+  # Optional: add a `CACHE_TOKEN` repo secret (classic PAT, `repo` scope) if
+  # the default GITHUB_TOKEN is not allowed to write. Falls back to GITHUB_TOKEN.
+  CACHE_TOKEN: ${{ secrets.CACHE_TOKEN || secrets.GITHUB_TOKEN }}
+  # Force gh to act on *this* repository. Without it gh resolves the repository
+  # from the git remote of the current directory, and the two cache steps run
+  # inside /workdir/openwrt, whose remote is immortalwrt/immortalwrt
+  # ("HTTP 403: Resource not accessible by integration").
+  GH_REPO: ${{ github.repository }}
 
 jobs:
   build:
@@ -67,6 +101,41 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
+    - name: Restore ccache
+      if: env.CACHE_CCACHE == 'true'
+      working-directory: /workdir/openwrt
+      env:
+        GH_TOKEN: ${{ env.CACHE_TOKEN }}
+      run: |
+        set -e
+        if ! gh release view "$CCACHE_CACHE_TAG" >/dev/null 2>&1; then
+          echo "No '$CCACHE_CACHE_TAG' Release yet; starting cold."
+          exit 0
+        fi
+        rm -rf /tmp/ccache-manifest && mkdir -p /tmp/ccache-manifest
+        gh release download "$CCACHE_CACHE_TAG" --dir /tmp/ccache-manifest --pattern 'ccache.manifest' --clobber 2>/dev/null || true
+        HASH="$(cat /tmp/ccache-manifest/ccache.manifest 2>/dev/null || true)"
+        if [ -z "$HASH" ]; then
+          echo "No manifest in the Release; starting cold."
+          exit 0
+        fi
+        echo "Restoring .ccache for manifest '$HASH' ..."
+        rm -rf /tmp/ccache-dist && mkdir -p /tmp/ccache-dist
+        gh release download "$CCACHE_CACHE_TAG" --dir /tmp/ccache-dist --pattern "ccache-${HASH}.tar.zst.part-*" --clobber || true
+        if ! ls /tmp/ccache-dist/ccache-${HASH}.tar.zst.part-* >/dev/null 2>&1; then
+          echo "::warning::manifest '$HASH' has no matching parts; starting cold."
+          exit 0
+        fi
+        cat /tmp/ccache-dist/ccache-${HASH}.tar.zst.part-* > /tmp/ccache.tar.zst
+        mkdir -p .ccache
+        if tar -I zstd -xf /tmp/ccache.tar.zst -C .; then
+          du -sh .ccache
+        else
+          echo "::warning::ccache archive is unreadable; continuing with a cold cache"
+          rm -rf .ccache
+          mkdir -p .ccache
+        fi
+
     #- name: Load custom feeds
     #  run: |
     #    [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
@@ -88,6 +157,40 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
+    - name: Restore package cache (dl)
+      if: env.CACHE_DL == 'true'
+      working-directory: /workdir/openwrt
+      env:
+        GH_TOKEN: ${{ env.CACHE_TOKEN }}
+      run: |
+        set -e
+        mkdir -p dl
+        if ! gh release view "$DL_CACHE_TAG" >/dev/null 2>&1; then
+          echo "No '$DL_CACHE_TAG' Release yet; starting cold."
+          exit 0
+        fi
+        rm -rf /tmp/dl-manifest && mkdir -p /tmp/dl-manifest
+        gh release download "$DL_CACHE_TAG" --dir /tmp/dl-manifest --pattern 'dl.manifest' --clobber 2>/dev/null || true
+        HASH="$(cat /tmp/dl-manifest/dl.manifest 2>/dev/null || true)"
+        if [ -z "$HASH" ]; then
+          echo "No manifest in the Release; starting cold."
+          exit 0
+        fi
+        echo "Restoring dl/ for manifest '$HASH' ..."
+        rm -rf /tmp/dl-dist && mkdir -p /tmp/dl-dist
+        gh release download "$DL_CACHE_TAG" --dir /tmp/dl-dist --pattern "dl-${HASH}.tar.zst.part-*" --clobber || true
+        if ! ls /tmp/dl-dist/dl-${HASH}.tar.zst.part-* >/dev/null 2>&1; then
+          echo "::warning::manifest '$HASH' has no matching parts; starting cold."
+          exit 0
+        fi
+        cat /tmp/dl-dist/dl-${HASH}.tar.zst.part-* > /tmp/dl.tar.zst
+        if ! tar -I zstd -xf /tmp/dl.tar.zst -C .; then
+          echo "::warning::dl archive is unreadable; starting cold."
+          rm -rf dl && mkdir -p dl
+          exit 0
+        fi
+        echo "dl/ restored: $(du -sh dl | cut -f1), $(find dl -type f | wc -l) files"
+
     - name: Download package
       id: package
       run: |
@@ -97,6 +200,47 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
         echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Save package cache (dl)
+      if: env.CACHE_DL == 'true' && steps.package.outputs.status == 'success'
+      working-directory: /workdir/openwrt
+      env:
+        GH_TOKEN: ${{ env.CACHE_TOKEN }}
+      run: |
+        set -e
+        [ -d dl ] || { echo "No dl/ directory; nothing to cache."; exit 0; }
+        HASH="$(find dl -type f -printf '%P %s\n' | LC_ALL=C sort | sha256sum | cut -c1-16)"
+        echo "dl/ manifest hash: $HASH"
+        gh release view "$DL_CACHE_TAG" >/dev/null 2>&1 || \
+          gh release create "$DL_CACHE_TAG" --title "dl cache" \
+            --notes "Cached output of 'make download'. Managed automatically by the OpenWrt Builder workflow - do not delete." \
+            --draft
+        rm -rf /tmp/dl-manifest && mkdir -p /tmp/dl-manifest
+        gh release download "$DL_CACHE_TAG" --dir /tmp/dl-manifest --pattern 'dl.manifest' --clobber 2>/dev/null || true
+        if [ -f /tmp/dl-manifest/dl.manifest ] && [ "$(cat /tmp/dl-manifest/dl.manifest)" = "$HASH" ]; then
+          echo "dl/ is unchanged since the last cached build; skipping upload."
+          exit 0
+        fi
+        rm -f /tmp/dl.tar.zst /tmp/dl.tar.zst.part-*
+        tar -I 'zstd -1 -T0' -cf /tmp/dl.tar.zst dl
+        rm -rf /tmp/dl-dist && mkdir -p /tmp/dl-dist
+        split -b "$DL_CACHE_PART_SIZE" -d -a 3 /tmp/dl.tar.zst "/tmp/dl-dist/dl-${HASH}.tar.zst.part-"
+        ls -lh /tmp/dl-dist
+        # Upload the parts first, then publish the manifest, so a partial
+        # upload can never leave a manifest pointing at missing parts.
+        gh release upload "$DL_CACHE_TAG" /tmp/dl-dist/dl-${HASH}.tar.zst.part-* --clobber
+        rm -rf /tmp/dl-manifest-new && mkdir -p /tmp/dl-manifest-new
+        printf '%s' "$HASH" > /tmp/dl-manifest-new/dl.manifest
+        gh release upload "$DL_CACHE_TAG" /tmp/dl-manifest-new/dl.manifest --clobber
+        # Drop parts from previous revisions so restores cannot mix versions.
+        gh release view "$DL_CACHE_TAG" --json assets -q '.assets[].name' \
+          | grep -E '^dl-[0-9a-f]{16}\.tar\.zst\.part-' \
+          | grep -v "^dl-${HASH}\." \
+          | while read -r name; do
+              echo "Removing stale asset: $name"
+              gh release delete-asset "$DL_CACHE_TAG" "$name" -y || true
+            done
+        echo "dl/ cache saved ($HASH)."
 
     - name: Upload dl directory
       uses: actions/upload-artifact@main
@@ -115,6 +259,60 @@ jobs:
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Show ccache statistics
+      if: always() && env.CACHE_CCACHE == 'true'
+      run: ccache -d /workdir/openwrt/.ccache -s || true
+
+    - name: Save ccache
+      # Run even when the compile failed (a partial cache still helps next time),
+      # but never when the compile never started: there would be nothing worth
+      # saving and the assets below would be replaced by an empty cache.
+      if: always() && env.CACHE_CCACHE == 'true' && steps.compile.outcome != 'skipped'
+      working-directory: /workdir/openwrt
+      env:
+        GH_TOKEN: ${{ env.CACHE_TOKEN }}
+      run: |
+        set -e
+        if [ ! -d .ccache ]; then
+          echo "No .ccache directory; nothing to save."
+          exit 0
+        fi
+        ccache -d .ccache -M "$CCACHE_MAX_SIZE" >/dev/null 2>&1 || true
+        rm -f /tmp/ccache.tar.zst
+        tar -I 'zstd -1 -T0' -cf /tmp/ccache.tar.zst .ccache
+        ls -lh /tmp/ccache.tar.zst
+        # A real OpenWrt ccache is hundreds of MiB; anything tiny means we are
+        # about to overwrite a good cache with garbage, so keep the old one.
+        SIZE=$(stat -c%s /tmp/ccache.tar.zst)
+        if [ "$SIZE" -lt 1048576 ]; then
+          echo "ccache archive is only $SIZE bytes; keeping the existing cache."
+          exit 0
+        fi
+        HASH="$(sha256sum /tmp/ccache.tar.zst | cut -c1-16)"
+        echo ".ccache manifest hash: $HASH"
+        gh release view "$CCACHE_CACHE_TAG" >/dev/null 2>&1 || \
+          gh release create "$CCACHE_CACHE_TAG" --title "ccache cache" \
+            --notes "Cached .ccache directory. Managed automatically by the OpenWrt Builder workflow - do not delete." \
+            --draft
+        rm -rf /tmp/ccache-dist && mkdir -p /tmp/ccache-dist
+        split -b "$CCACHE_CACHE_PART_SIZE" -d -a 3 /tmp/ccache.tar.zst "/tmp/ccache-dist/ccache-${HASH}.tar.zst.part-"
+        ls -lh /tmp/ccache-dist
+        # Upload the parts first, then publish the manifest, so a partial
+        # upload can never leave a manifest pointing at missing parts.
+        gh release upload "$CCACHE_CACHE_TAG" /tmp/ccache-dist/ccache-${HASH}.tar.zst.part-* --clobber
+        rm -rf /tmp/ccache-manifest-new && mkdir -p /tmp/ccache-manifest-new
+        printf '%s' "$HASH" > /tmp/ccache-manifest-new/ccache.manifest
+        gh release upload "$CCACHE_CACHE_TAG" /tmp/ccache-manifest-new/ccache.manifest --clobber
+        # Drop parts from previous revisions so restores cannot mix versions.
+        gh release view "$CCACHE_CACHE_TAG" --json assets -q '.assets[].name' \
+          | grep -E '^ccache-[0-9a-f]{16}\.tar\.zst\.part-' \
+          | grep -v "^ccache-${HASH}\." \
+          | while read -r name; do
+              echo "Removing stale asset: $name"
+              gh release delete-asset "$CCACHE_CACHE_TAG" "$name" -y || true
+            done
+        echo ".ccache cache saved ($HASH)."
 
     - name: Check space usage
       if: (!cancelled())
@@ -162,17 +360,18 @@ jobs:
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
 
-    - name: Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@main
-      with:
-        retain_days: 0
-        keep_minimum_runs: 2
-
+    # NOTE: the P3TERX template ends with a "Delete workflow runs" step
+    # (Mattraks/delete-workflow-runs with retain_days: 0, keep_minimum_runs: 2).
+    # It was removed on purpose: it wiped all but the two newest runs after
+    # every build, and deleting a run also deletes its firmware artifacts.
+    # Run history and artifacts are now kept; clean them up manually.
     - name: Remove old Releases
       uses: dev-drprasad/delete-older-releases@master
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       with:
         keep_latest: 3
         delete_tags: true
+        # NOTE: the dl-cache Release is created as a *draft*, which this action
+        # does not list, so it is never removed by the cleanup below.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
