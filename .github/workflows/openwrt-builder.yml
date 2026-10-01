@@ -16,9 +16,8 @@ on:
   repository_dispatch:
   workflow_dispatch:
 
-# The cache steps need to create/update a Release (dl cache) and force-push a
-# cache branch (ccache), so Contents must be writable. actions:write is needed
-# by the "Delete workflow runs" step below.
+# The cache steps create/update two Release objects (dl + ccache), so Contents
+# must be writable. actions:write is needed by the "Delete workflow runs" step.
 permissions:
   contents: write
   actions: write
@@ -42,17 +41,20 @@ env:
   TZ: Asia/Shanghai
 
   # ===== Build cache =====================================================
-  # Downloaded packages (dl/) are stored as split assets of a Release, keyed
-  # by a manifest hash so an unchanged dl/ is never re-uploaded. Intermediate
-  # compiler output (.ccache) is stored on a dedicated, force-pushed branch.
+  # Both caches are split assets of their own (draft) Release, each guarded by
+  # a manifest asset so a half-finished upload can never be restored. dl/ is
+  # keyed by its content hash, so an unchanged dl/ is never re-uploaded.
+  # Releases are used instead of actions/cache because the free-tier cache is
+  # capped at 10 GB per repo and expires after 7 days without access, while
+  # Release assets have no such expiry.
   CACHE_DL: true                 # store dl/ in the Release below
   DL_CACHE_TAG: dl-cache         # Release tag that holds the dl/ cache
   DL_CACHE_PART_SIZE: 1800M      # must stay below GitHub's 2 GiB/asset limit
-  CACHE_CCACHE: true             # store .ccache on the branch below
-  CCACHE_CACHE_BRANCH: ccache-cache
+  CACHE_CCACHE: true             # store .ccache in the Release below
+  CCACHE_CACHE_TAG: ccache-cache # Release tag that holds the .ccache cache
   CCACHE_MAX_SIZE: 2G            # cap for the .ccache directory
   CCACHE_DIR: /workdir/openwrt/.ccache
-  CACHE_PART_SIZE_CCACHE: 90M    # < 100 MiB single-file git limit
+  CCACHE_CACHE_PART_SIZE: 1800M  # must stay below GitHub's 2 GiB/asset limit
   # Optional: add a `CACHE_TOKEN` repo secret (classic PAT, `repo` scope) if
   # the default GITHUB_TOKEN is not allowed to write. Falls back to GITHUB_TOKEN.
   CACHE_TOKEN: ${{ secrets.CACHE_TOKEN || secrets.GITHUB_TOKEN }}
@@ -69,17 +71,6 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@main
-
-    - name: Checkout ccache cache branch
-      # The branch does not exist on the first run, so a failure here is fine.
-      if: env.CACHE_CCACHE == 'true'
-      continue-on-error: true
-      uses: actions/checkout@main
-      with:
-        ref: ${{ env.CCACHE_CACHE_BRANCH }}
-        path: ccache-cache
-        fetch-depth: 1
-        token: ${{ env.CACHE_TOKEN }}
 
     - name: Free space
       uses: Darks41/free-disk-space@ubuntu-24.04
@@ -113,21 +104,37 @@ jobs:
 
     - name: Restore ccache
       if: env.CACHE_CCACHE == 'true'
+      working-directory: /workdir/openwrt
+      env:
+        GH_TOKEN: ${{ env.CACHE_TOKEN }}
       run: |
         set -e
-        if ls ccache-cache/ccache.tar.zst.part-* >/dev/null 2>&1; then
-          echo "Restoring .ccache from branch '$CCACHE_CACHE_BRANCH' ..."
-          cat ccache-cache/ccache.tar.zst.part-* > /tmp/ccache.tar.zst
-          mkdir -p /workdir/openwrt/.ccache
-          if tar -I zstd -xf /tmp/ccache.tar.zst -C /workdir/openwrt; then
-            du -sh /workdir/openwrt/.ccache
-          else
-            echo "::warning::ccache archive is unreadable; continuing with a cold cache"
-            rm -rf /workdir/openwrt/.ccache
-            mkdir -p /workdir/openwrt/.ccache
-          fi
+        if ! gh release view "$CCACHE_CACHE_TAG" >/dev/null 2>&1; then
+          echo "No '$CCACHE_CACHE_TAG' Release yet; starting cold."
+          exit 0
+        fi
+        rm -rf /tmp/ccache-manifest && mkdir -p /tmp/ccache-manifest
+        gh release download "$CCACHE_CACHE_TAG" --dir /tmp/ccache-manifest --pattern 'ccache.manifest' --clobber 2>/dev/null || true
+        HASH="$(cat /tmp/ccache-manifest/ccache.manifest 2>/dev/null || true)"
+        if [ -z "$HASH" ]; then
+          echo "No manifest in the Release; starting cold."
+          exit 0
+        fi
+        echo "Restoring .ccache for manifest '$HASH' ..."
+        rm -rf /tmp/ccache-dist && mkdir -p /tmp/ccache-dist
+        gh release download "$CCACHE_CACHE_TAG" --dir /tmp/ccache-dist --pattern "ccache-${HASH}.tar.zst.part-*" --clobber || true
+        if ! ls /tmp/ccache-dist/ccache-${HASH}.tar.zst.part-* >/dev/null 2>&1; then
+          echo "::warning::manifest '$HASH' has no matching parts; starting cold."
+          exit 0
+        fi
+        cat /tmp/ccache-dist/ccache-${HASH}.tar.zst.part-* > /tmp/ccache.tar.zst
+        mkdir -p .ccache
+        if tar -I zstd -xf /tmp/ccache.tar.zst -C .; then
+          du -sh .ccache
         else
-          echo "No ccache cache on branch '$CCACHE_CACHE_BRANCH'; starting cold."
+          echo "::warning::ccache archive is unreadable; continuing with a cold cache"
+          rm -rf .ccache
+          mkdir -p .ccache
         fi
 
     - name: Load custom feeds
@@ -260,20 +267,21 @@ jobs:
 
     - name: Save ccache
       # Run even when the compile failed (a partial cache still helps next time),
-      # but never when the compile never started: .ccache would be empty and the
-      # force-push below would replace a good cache with nothing.
+      # but never when the compile never started: there would be nothing worth
+      # saving and the assets below would be replaced by an empty cache.
       if: always() && env.CACHE_CCACHE == 'true' && steps.compile.outcome != 'skipped'
+      working-directory: /workdir/openwrt
       env:
         GH_TOKEN: ${{ env.CACHE_TOKEN }}
       run: |
         set -e
-        if [ ! -d /workdir/openwrt/.ccache ]; then
+        if [ ! -d .ccache ]; then
           echo "No .ccache directory; nothing to save."
           exit 0
         fi
-        ccache -d /workdir/openwrt/.ccache -M "$CCACHE_MAX_SIZE" >/dev/null 2>&1 || true
+        ccache -d .ccache -M "$CCACHE_MAX_SIZE" >/dev/null 2>&1 || true
         rm -f /tmp/ccache.tar.zst
-        tar -I 'zstd -1 -T0' -cf /tmp/ccache.tar.zst -C /workdir/openwrt .ccache
+        tar -I 'zstd -1 -T0' -cf /tmp/ccache.tar.zst .ccache
         ls -lh /tmp/ccache.tar.zst
         # A real OpenWrt ccache is hundreds of MiB; anything tiny means we are
         # about to overwrite a good cache with garbage, so keep the old one.
@@ -282,20 +290,30 @@ jobs:
           echo "ccache archive is only $SIZE bytes; keeping the existing cache."
           exit 0
         fi
-        rm -rf /tmp/ccache-branch && mkdir -p /tmp/ccache-branch
-        split -b "$CACHE_PART_SIZE_CCACHE" -d -a 3 /tmp/ccache.tar.zst /tmp/ccache-branch/ccache.tar.zst.part-
-        ls -lh /tmp/ccache-branch
-        cd /tmp/ccache-branch
-        git init -q
-        git config user.name 'github-actions[bot]'
-        git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-        git checkout -q -B "$CCACHE_CACHE_BRANCH"
-        git add -A
-        git commit -q -m "Update ccache cache ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
-        git push -q --force \
-          "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-          "HEAD:${CCACHE_CACHE_BRANCH}"
-        echo "ccache cache branch '$CCACHE_CACHE_BRANCH' updated."
+        HASH="$(sha256sum /tmp/ccache.tar.zst | cut -c1-16)"
+        echo ".ccache manifest hash: $HASH"
+        gh release view "$CCACHE_CACHE_TAG" >/dev/null 2>&1 || \
+          gh release create "$CCACHE_CACHE_TAG" --title "ccache cache" \
+            --notes "Cached .ccache directory. Managed automatically by the OpenWrt Builder workflow - do not delete." \
+            --draft
+        rm -rf /tmp/ccache-dist && mkdir -p /tmp/ccache-dist
+        split -b "$CCACHE_CACHE_PART_SIZE" -d -a 3 /tmp/ccache.tar.zst "/tmp/ccache-dist/ccache-${HASH}.tar.zst.part-"
+        ls -lh /tmp/ccache-dist
+        # Upload the parts first, then publish the manifest, so a partial
+        # upload can never leave a manifest pointing at missing parts.
+        gh release upload "$CCACHE_CACHE_TAG" /tmp/ccache-dist/ccache-${HASH}.tar.zst.part-* --clobber
+        rm -rf /tmp/ccache-manifest-new && mkdir -p /tmp/ccache-manifest-new
+        printf '%s' "$HASH" > /tmp/ccache-manifest-new/ccache.manifest
+        gh release upload "$CCACHE_CACHE_TAG" /tmp/ccache-manifest-new/ccache.manifest --clobber
+        # Drop parts from previous revisions so restores cannot mix versions.
+        gh release view "$CCACHE_CACHE_TAG" --json assets -q '.assets[].name' \
+          | grep -E '^ccache-[0-9a-f]{16}\.tar\.zst\.part-' \
+          | grep -v "^ccache-${HASH}\." \
+          | while read -r name; do
+              echo "Removing stale asset: $name"
+              gh release delete-asset "$CCACHE_CACHE_TAG" "$name" -y || true
+            done
+        echo ".ccache cache saved ($HASH)."
 
     - name: Check space usage
       if: (!cancelled())

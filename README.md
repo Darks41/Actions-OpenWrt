@@ -30,24 +30,29 @@ itself**, so no third-party cache service is involved:
 | Cache | Contents | Stored as |
 | --- | --- | --- |
 | `dl` | packages fetched by `make download` | assets of the **draft** Release tagged `dl-cache` |
-| ccache | intermediate compiler output (`.ccache`) | the force-pushed branch `ccache-cache` |
+| ccache | intermediate compiler output (`.ccache`) | assets of the **draft** Release tagged `ccache-cache` |
 
-- `dl/` is re-uploaded only when its contents change: a `dl.manifest` asset holds a
-  hash of the file list, and parts of older revisions are deleted after the new
-  parts have been uploaded.
-- The `.ccache` branch is recreated from scratch on every build (`git push --force`),
-  so it never accumulates history. Compiler caching itself is enabled by
-  `CONFIG_DEVEL=y` and `CONFIG_CCACHE=y` in the `.config` file.
+- Both caches are split into parts (1800M each, below GitHub's 2 GiB/asset limit)
+  and guarded by a manifest asset (`dl.manifest` / `ccache.manifest`). Parts are
+  uploaded first and the manifest last, so a half-finished upload can never be
+  restored; parts of older revisions are deleted afterwards.
+- `dl/` is re-uploaded only when its contents change: `dl.manifest` holds a hash of
+  the file list, and an unchanged `dl/` skips the upload entirely.
+- Compiler caching itself is enabled by `CONFIG_DEVEL=y` and `CONFIG_CCACHE=y` in
+  the `.config` file, with `CCACHE_MAX_SIZE` (2G) capping the directory.
 - Both caches are switched by the `CACHE_DL` / `CACHE_CCACHE` variables at the top
   of the workflow.
 
-**清理缓存 / Clearing the cache:** delete the `dl-cache` Release and the
-`ccache-cache` branch. To disable caching, set `CACHE_DL: false` and
-`CACHE_CCACHE: false`.
+> Releases are used instead of `actions/cache` on purpose. The free-tier Actions
+> cache is capped at 10 GB per repository and **expires 7 days after last access**,
+> which a firmware repository that is built only occasionally would constantly hit.
 
-> The `dl-cache` Release is deliberately created as a **draft**: the
+**清理缓存 / Clearing the cache:** delete the `dl-cache` and `ccache-cache`
+Releases. To disable caching, set `CACHE_DL: false` and `CACHE_CCACHE: false`.
+
+> Both Releases are deliberately created as **drafts**: the
 > `delete-older-releases` step only lists published releases, so `keep_latest: 3`
-> can never delete it, and it stays hidden on the Releases page.
+> can never delete them, and they stay hidden on the Releases page.
 
 ## Credits
 
