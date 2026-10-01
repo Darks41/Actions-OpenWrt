@@ -51,7 +51,7 @@ env:
   DL_CACHE_PART_SIZE: 1800M      # must stay below GitHub's 2 GiB/asset limit
   CACHE_CCACHE: true             # store .ccache in the Release below
   CCACHE_CACHE_TAG: ccache-cache-25.12 # Release tag that holds the .ccache cache
-  CCACHE_MAX_SIZE: 2G            # cap for the .ccache directory
+  CCACHE_MAX_SIZE: 6G            # cap for the .ccache directory
   CCACHE_DIR: /workdir/openwrt/.ccache
   CCACHE_CACHE_PART_SIZE: 1800M  # must stay below GitHub's 2 GiB/asset limit
   # Optional: add a `CACHE_TOKEN` repo secret (classic PAT, `repo` scope) if
@@ -101,41 +101,6 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: Restore ccache
-      if: env.CACHE_CCACHE == 'true'
-      working-directory: /workdir/openwrt
-      env:
-        GH_TOKEN: ${{ env.CACHE_TOKEN }}
-      run: |
-        set -e
-        if ! gh release view "$CCACHE_CACHE_TAG" >/dev/null 2>&1; then
-          echo "No '$CCACHE_CACHE_TAG' Release yet; starting cold."
-          exit 0
-        fi
-        rm -rf /tmp/ccache-manifest && mkdir -p /tmp/ccache-manifest
-        gh release download "$CCACHE_CACHE_TAG" --dir /tmp/ccache-manifest --pattern 'ccache.manifest' --clobber 2>/dev/null || true
-        HASH="$(cat /tmp/ccache-manifest/ccache.manifest 2>/dev/null || true)"
-        if [ -z "$HASH" ]; then
-          echo "No manifest in the Release; starting cold."
-          exit 0
-        fi
-        echo "Restoring .ccache for manifest '$HASH' ..."
-        rm -rf /tmp/ccache-dist && mkdir -p /tmp/ccache-dist
-        gh release download "$CCACHE_CACHE_TAG" --dir /tmp/ccache-dist --pattern "ccache-${HASH}.tar.zst.part-*" --clobber || true
-        if ! ls /tmp/ccache-dist/ccache-${HASH}.tar.zst.part-* >/dev/null 2>&1; then
-          echo "::warning::manifest '$HASH' has no matching parts; starting cold."
-          exit 0
-        fi
-        cat /tmp/ccache-dist/ccache-${HASH}.tar.zst.part-* > /tmp/ccache.tar.zst
-        mkdir -p .ccache
-        if tar -I zstd -xf /tmp/ccache.tar.zst -C .; then
-          du -sh .ccache
-        else
-          echo "::warning::ccache archive is unreadable; continuing with a cold cache"
-          rm -rf .ccache
-          mkdir -p .ccache
-        fi
-
     - name: Load custom feeds
       run: |
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
@@ -156,6 +121,59 @@ jobs:
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
+
+    - name: Restore ccache
+      if: env.CACHE_CCACHE == 'true'
+      working-directory: /workdir/openwrt
+      env:
+        GH_TOKEN: ${{ env.CACHE_TOKEN }}
+      run: |
+        set -e
+        if ! gh release view "$CCACHE_CACHE_TAG" >/dev/null 2>&1; then
+          echo "No '$CCACHE_CACHE_TAG' Release yet; starting cold."
+          exit 0
+        fi
+        # A ccache is only meaningful for the platform it was built on. The
+        # fingerprint covers the target architecture, the compiler and the C
+        # library: changing the device while staying on the same architecture
+        # keeps reusing the cache (ccache keys already include every compiler
+        # flag), while a real architecture or toolchain change starts cold
+        # instead of restoring objects that can never be used.
+        FP="$(grep -E '^CONFIG_(TARGET_ARCH_PACKAGES|GCC_VERSION|LIBC|LIBC_VERSION|ARCH)=' .config | LC_ALL=C sort | sha256sum | cut -c1-8)"
+        echo "Platform fingerprint: $FP"
+        rm -rf /tmp/ccache-manifest && mkdir -p /tmp/ccache-manifest
+        gh release download "$CCACHE_CACHE_TAG" --dir /tmp/ccache-manifest --pattern 'ccache.manifest' --clobber 2>/dev/null || true
+        MAN="$(cat /tmp/ccache-manifest/ccache.manifest 2>/dev/null || true)"
+        if [ -z "$MAN" ]; then
+          echo "No manifest in the Release; starting cold."
+          exit 0
+        fi
+        CACHED_FP="${MAN%% *}"
+        HASH="${MAN##* }"
+        if [ "$CACHED_FP" = "$MAN" ]; then
+          # Manifest written before the fingerprint existed: hash only.
+          CACHED_FP="$FP"
+        fi
+        if [ "$CACHED_FP" != "$FP" ]; then
+          echo "::warning::cached ccache was built for platform '$CACHED_FP' but this build needs '$FP'; starting cold."
+          exit 0
+        fi
+        echo "Restoring .ccache for manifest '$HASH' ..."
+        rm -rf /tmp/ccache-dist && mkdir -p /tmp/ccache-dist
+        gh release download "$CCACHE_CACHE_TAG" --dir /tmp/ccache-dist --pattern "ccache-${HASH}.tar.zst.part-*" --clobber || true
+        if ! ls /tmp/ccache-dist/ccache-${HASH}.tar.zst.part-* >/dev/null 2>&1; then
+          echo "::warning::manifest '$HASH' has no matching parts; starting cold."
+          exit 0
+        fi
+        cat /tmp/ccache-dist/ccache-${HASH}.tar.zst.part-* > /tmp/ccache.tar.zst
+        mkdir -p .ccache
+        if tar -I zstd -xf /tmp/ccache.tar.zst -C .; then
+          du -sh .ccache
+        else
+          echo "::warning::ccache archive is unreadable; continuing with a cold cache"
+          rm -rf .ccache
+          mkdir -p .ccache
+        fi
 
     - name: Restore package cache (dl)
       if: env.CACHE_DL == 'true'
@@ -290,7 +308,10 @@ jobs:
           exit 0
         fi
         HASH="$(sha256sum /tmp/ccache.tar.zst | cut -c1-16)"
-        echo ".ccache manifest hash: $HASH"
+        # Same fingerprint as the restore step; stored next to the hash so a
+        # build on another platform refuses this cache instead of restoring it.
+        FP="$(grep -E '^CONFIG_(TARGET_ARCH_PACKAGES|GCC_VERSION|LIBC|LIBC_VERSION|ARCH)=' .config | LC_ALL=C sort | sha256sum | cut -c1-8)"
+        echo ".ccache manifest: platform $FP, hash $HASH"
         gh release view "$CCACHE_CACHE_TAG" >/dev/null 2>&1 || \
           gh release create "$CCACHE_CACHE_TAG" --title "ccache cache" \
             --notes "Cached .ccache directory. Managed automatically by the OpenWrt Builder workflow - do not delete." \
@@ -302,7 +323,7 @@ jobs:
         # upload can never leave a manifest pointing at missing parts.
         gh release upload "$CCACHE_CACHE_TAG" /tmp/ccache-dist/ccache-${HASH}.tar.zst.part-* --clobber
         rm -rf /tmp/ccache-manifest-new && mkdir -p /tmp/ccache-manifest-new
-        printf '%s' "$HASH" > /tmp/ccache-manifest-new/ccache.manifest
+        printf '%s %s' "$FP" "$HASH" > /tmp/ccache-manifest-new/ccache.manifest
         gh release upload "$CCACHE_CACHE_TAG" /tmp/ccache-manifest-new/ccache.manifest --clobber
         # Drop parts from previous revisions so restores cannot mix versions.
         gh release view "$CCACHE_CACHE_TAG" --json assets -q '.assets[].name' \
