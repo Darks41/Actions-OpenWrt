@@ -22,6 +22,38 @@ A template for building OpenWrt with GitHub Actions
 - It may take a long time to create a `.config` file and build the OpenWrt firmware. Thus, before create repository to build your own firmware, you may check out if others have already built it which meet your needs by simply [search `Actions-Openwrt` in GitHub](https://github.com/search?q=Actions-openwrt).
 - Add some meta info of your built firmware (such as firmware architecture and installed packages) to your repository introduction, this will save others' time.
 
+## Build cache
+
+To shorten the next compilation, each build stores its caches **in this repository
+itself**, so no third-party cache service is involved:
+
+| Cache | Contents | Stored as |
+| --- | --- | --- |
+| `dl` | packages fetched by `make download` | assets of the **draft** Release tagged `dl-cache-25.12` |
+| ccache | intermediate compiler output (`.ccache`) | assets of the **draft** Release tagged `ccache-cache-25.12` |
+
+- Both caches are split into parts (1800M each, below GitHub's 2 GiB/asset limit)
+  and guarded by a manifest asset (`dl.manifest` / `ccache.manifest`). Parts are
+  uploaded first and the manifest last, so a half-finished upload can never be
+  restored; parts of older revisions are deleted afterwards.
+- `dl/` is re-uploaded only when its contents change: `dl.manifest` holds a hash of
+  the file list, and an unchanged `dl/` skips the upload entirely.
+- Compiler caching itself is enabled by `CONFIG_DEVEL=y` and `CONFIG_CCACHE=y` in
+  the `.config` file, with `CCACHE_MAX_SIZE` (2G) capping the directory.
+- Both caches are switched by the `CACHE_DL` / `CACHE_CCACHE` variables at the top
+  of the workflow.
+
+> Releases are used instead of `actions/cache` on purpose. The free-tier Actions
+> cache is capped at 10 GB per repository and **expires 7 days after last access**,
+> which a firmware repository that is built only occasionally would constantly hit.
+
+**清理缓存 / Clearing the cache:** delete the `dl-cache-25.12` and `ccache-cache-25.12`
+Releases. To disable caching, set `CACHE_DL: false` and `CACHE_CCACHE: false`.
+
+> Both Releases are deliberately created as **drafts**: the
+> `delete-older-releases` step only lists published releases, so `keep_latest: 3`
+> can never delete them, and they stay hidden on the Releases page.
+
 ## Credits
 
 - [Microsoft Azure](https://azure.microsoft.com)
