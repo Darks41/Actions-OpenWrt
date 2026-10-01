@@ -17,10 +17,9 @@ on:
   workflow_dispatch:
 
 # The cache steps create/update two Release objects (dl + ccache), so Contents
-# must be writable. actions:write is needed by the "Delete workflow runs" step.
+# must be writable.
 permissions:
   contents: write
-  actions: write
 
 # Never let two builds rewrite the shared caches at the same time.
 concurrency:
@@ -361,12 +360,11 @@ jobs:
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
 
-    - name: Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@main
-      with:
-        retain_days: 0
-        keep_minimum_runs: 2
-
+    # NOTE: the P3TERX template ends with a "Delete workflow runs" step
+    # (Mattraks/delete-workflow-runs with retain_days: 0, keep_minimum_runs: 2).
+    # It was removed on purpose: it wiped all but the two newest runs after
+    # every build, and deleting a run also deletes its firmware artifacts.
+    # Run history and artifacts are now kept; clean them up manually.
     - name: Remove old Releases
       uses: dev-drprasad/delete-older-releases@master
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
