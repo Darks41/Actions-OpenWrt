@@ -22,6 +22,33 @@ A template for building OpenWrt with GitHub Actions
 - It may take a long time to create a `.config` file and build the OpenWrt firmware. Thus, before create repository to build your own firmware, you may check out if others have already built it which meet your needs by simply [search `Actions-Openwrt` in GitHub](https://github.com/search?q=Actions-openwrt).
 - Add some meta info of your built firmware (such as firmware architecture and installed packages) to your repository introduction, this will save others' time.
 
+## Build cache
+
+To shorten the next compilation, each build stores its caches **in this repository
+itself**, so no third-party cache service is involved:
+
+| Cache | Contents | Stored as |
+| --- | --- | --- |
+| `dl` | packages fetched by `make download` | assets of the **draft** Release tagged `dl-cache` |
+| ccache | intermediate compiler output (`.ccache`) | the force-pushed branch `ccache-cache` |
+
+- `dl/` is re-uploaded only when its contents change: a `dl.manifest` asset holds a
+  hash of the file list, and parts of older revisions are deleted after the new
+  parts have been uploaded.
+- The `.ccache` branch is recreated from scratch on every build (`git push --force`),
+  so it never accumulates history. Compiler caching itself is enabled by
+  `CONFIG_DEVEL=y` and `CONFIG_CCACHE=y` in the `.config` file.
+- Both caches are switched by the `CACHE_DL` / `CACHE_CCACHE` variables at the top
+  of the workflow.
+
+**清理缓存 / Clearing the cache:** delete the `dl-cache` Release and the
+`ccache-cache` branch. To disable caching, set `CACHE_DL: false` and
+`CACHE_CCACHE: false`.
+
+> The `dl-cache` Release is deliberately created as a **draft**: the
+> `delete-older-releases` step only lists published releases, so `keep_latest: 3`
+> can never delete it, and it stays hidden on the Releases page.
+
 ## Credits
 
 - [Microsoft Azure](https://azure.microsoft.com)
