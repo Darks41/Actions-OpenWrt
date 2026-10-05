@@ -24,11 +24,35 @@ A template for building OpenWrt with GitHub Actions
 
 ## Build cache
 
-Downloaded packages (`dl/`) and the compiler cache (`.ccache`) are stored in this
-repository's own Releases, so the next build does not start from zero.
+To shorten the next compilation, each build stores its caches **in this repository
+itself**, so no third-party cache service is involved. Every branch has its own
+pair of **draft** Releases -- `dl-cache` / `ccache-cache` for `snapshot`, the same
+names with a `-lede` / `-ac5s-6.18` suffix for the other branches -- and their
+titles carry the branch and the update time (Beijing time).
 
-See **[docs/build-cache.md](docs/build-cache.md)** for the per-branch Release
-names, the platform fingerprint, the switches and how to clear a cache.
+- Both caches are split into 1800M parts (below GitHub's 2 GiB/asset limit) and
+  guarded by a manifest asset (`dl.manifest` / `ccache.manifest`). Parts are
+  uploaded first and the manifest last, and the parts of the previous revision are
+  deleted right afterwards: **exactly one revision of each cache is ever kept.**
+- `dl/` is re-uploaded only when its contents change: `dl.manifest` holds a hash of
+  the file list, and an unchanged `dl/` skips the upload entirely.
+- Compiler caching is enabled by `CONFIG_DEVEL=y` and `CONFIG_CCACHE=y` in the
+  branch's `.config` file, with `CCACHE_MAX_SIZE` (6G) applied by `ccache -M` just
+  before the build.
+- `ccache.manifest` also records a **platform fingerprint** -- target architecture,
+  GCC version and C library. A cache built for a different architecture or
+  toolchain is refused and the build starts cold, instead of restoring objects it
+  could never use. Changing the device while staying on the same architecture
+  keeps the cache.
+- Both caches are switched by the `CACHE_DL` / `CACHE_CCACHE` variables at the top
+  of the workflow.
+
+> Releases are used instead of `actions/cache` on purpose. The free-tier Actions
+> cache is capped at 10 GB per repository and **expires 7 days after last access**,
+> which a firmware repository that is built only occasionally would constantly hit.
+
+**Clearing the cache:** delete that branch's `dl-cache*` and `ccache-cache*`
+Releases. To disable caching, set `CACHE_DL: false` and `CACHE_CCACHE: false`.
 
 ## Credits
 
