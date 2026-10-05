@@ -250,7 +250,7 @@ jobs:
         # Stamp the release with the branch and the update time so a human can
         # tell which branch a cache belongs to and how old it is.
         BRANCH="${GITHUB_REF_NAME:-unknown}"
-        NOW="$(date -u '+%Y-%m-%d %H:%M UTC')"
+        NOW="$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M UTC+8')"
         [ -d dl ] || { echo "No dl/ directory; nothing to cache."; exit 0; }
         HASH="$(find dl -type f -printf '%P %s\n' | LC_ALL=C sort | sha256sum | cut -c1-16)"
         echo "dl/ manifest hash: $HASH"
@@ -332,7 +332,7 @@ jobs:
         # Stamp the release with the branch and the update time (see the
         # "Save package cache (dl)" step).
         BRANCH="${GITHUB_REF_NAME:-unknown}"
-        NOW="$(date -u '+%Y-%m-%d %H:%M UTC')"
+        NOW="$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M UTC+8')"
         if [ ! -d .ccache ]; then
           echo "No .ccache directory; nothing to save."
           exit 0

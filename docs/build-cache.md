@@ -16,10 +16,10 @@
 
 两个 Release 都刻意建成**草稿（draft）**，访客的 Releases 页面看不到它们，
 只遍历已发布 Release 的步骤（如 `delete-older-releases`）也不会误删。
-标题写明分支和更新时间：
+标题写明分支和更新时间（统一北京时间，UTC+8）：
 
 ```
-[snapshot] ccache cache - updated 2026-10-01 18:22 UTC
+[snapshot] ccache cache - updated 2026-10-02 02:22 UTC+8
 ```
 
 ## 永远只保留一份
