@@ -247,11 +247,15 @@ jobs:
         GH_TOKEN: ${{ env.CACHE_TOKEN }}
       run: |
         set -e
+        # Stamp the release with the branch and the update time so a human can
+        # tell which branch a cache belongs to and how old it is.
+        BRANCH="${GITHUB_REF_NAME:-unknown}"
+        NOW="$(date -u '+%Y-%m-%d %H:%M UTC')"
         [ -d dl ] || { echo "No dl/ directory; nothing to cache."; exit 0; }
         HASH="$(find dl -type f -printf '%P %s\n' | LC_ALL=C sort | sha256sum | cut -c1-16)"
         echo "dl/ manifest hash: $HASH"
         gh release view "$DL_CACHE_TAG" >/dev/null 2>&1 || \
-          gh release create "$DL_CACHE_TAG" --title "dl cache" \
+          gh release create "$DL_CACHE_TAG" --title "[$BRANCH] dl cache" \
             --notes "Cached output of 'make download'. Managed automatically by the OpenWrt Builder workflow - do not delete." \
             --draft
         rm -rf /tmp/dl-manifest && mkdir -p /tmp/dl-manifest
@@ -279,6 +283,14 @@ jobs:
               echo "Removing stale asset: $name"
               gh release delete-asset "$DL_CACHE_TAG" "$name" -y || true
             done
+        # Refresh title and notes now that this revision is fully published.
+        printf 'Branch: %s\nCache: dl/ - output of "make download"\nUpdated: %s\nRevision: %s\n' \
+          "$BRANCH" "$NOW" "$HASH" > /tmp/dl-release-notes.txt
+        printf '\nManaged automatically by the OpenWrt Builder workflow - do not delete.\n' \
+          >> /tmp/dl-release-notes.txt
+        gh release edit "$DL_CACHE_TAG" \
+          --title "[$BRANCH] dl cache - updated $NOW" \
+          --notes-file /tmp/dl-release-notes.txt
         echo "dl/ cache saved ($HASH)."
 
     - name: Upload dl directory
@@ -317,6 +329,10 @@ jobs:
         GH_TOKEN: ${{ env.CACHE_TOKEN }}
       run: |
         set -e
+        # Stamp the release with the branch and the update time (see the
+        # "Save package cache (dl)" step).
+        BRANCH="${GITHUB_REF_NAME:-unknown}"
+        NOW="$(date -u '+%Y-%m-%d %H:%M UTC')"
         if [ ! -d .ccache ]; then
           echo "No .ccache directory; nothing to save."
           exit 0
@@ -343,7 +359,7 @@ jobs:
         fi
         echo ".ccache manifest: platform $FP, hash $HASH"
         gh release view "$CCACHE_CACHE_TAG" >/dev/null 2>&1 || \
-          gh release create "$CCACHE_CACHE_TAG" --title "ccache cache" \
+          gh release create "$CCACHE_CACHE_TAG" --title "[$BRANCH] ccache cache" \
             --notes "Cached .ccache directory. Managed automatically by the OpenWrt Builder workflow - do not delete." \
             --draft
         rm -rf /tmp/ccache-dist && mkdir -p /tmp/ccache-dist
@@ -363,6 +379,14 @@ jobs:
               echo "Removing stale asset: $name"
               gh release delete-asset "$CCACHE_CACHE_TAG" "$name" -y || true
             done
+        # Refresh title and notes now that this revision is fully published.
+        printf 'Branch: %s\nCache: .ccache - ccache compiler cache\nPlatform fingerprint: %s\nUpdated: %s\nRevision: %s\n' \
+          "$BRANCH" "$FP" "$NOW" "$HASH" > /tmp/ccache-release-notes.txt
+        printf '\nManaged automatically by the OpenWrt Builder workflow - do not delete.\n' \
+          >> /tmp/ccache-release-notes.txt
+        gh release edit "$CCACHE_CACHE_TAG" \
+          --title "[$BRANCH] ccache cache - updated $NOW" \
+          --notes-file /tmp/ccache-release-notes.txt
         echo ".ccache cache saved ($HASH)."
 
     - name: Check space usage
