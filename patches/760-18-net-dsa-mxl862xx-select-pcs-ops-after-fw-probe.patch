@@ -1,0 +1,33 @@
+From: lwj <lw91411@gmail.com>
+Date: Tue, 6 Oct 2026 16:45:00 +0000
+Subject: [PATCH] net: dsa: mxl862xx: choose SerDes PCS ops once the firmware version is known
+
+760-05 moved mxl862xx_setup_pcs() ahead of mxl862xx_wait_ready(), so the
+firmware-version based ops selection added by 760-16 always reads version 0
+and installs the legacy ops even on firmware >= 1.0.84.  The legacy in-band
+caps for 2500BASE-X are LINK_INBAND_DISABLE only, which makes SFP module
+insertion fail with "autoneg setting not compatible with PCS" for 2.5G
+copper modules.
+
+Re-select the ops in mxl862xx_phylink_mac_select_pcs(), which only runs once
+mxl862xx_wait_ready() has populated priv->fw_version.
+
+Signed-off-by: lwj <lw91411@gmail.com>
+---
+ drivers/net/dsa/mxl862xx/mxl862xx-phylink.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+--- a/drivers/net/dsa/mxl862xx/mxl862xx-phylink.c
++++ b/drivers/net/dsa/mxl862xx/mxl862xx-phylink.c
+@@ -563,6 +563,11 @@ mxl862xx_phylink_mac_select_pcs(struct p
+ 				      "SerDes PCS unsupported on old firmware.\n");
+ 			return NULL;
+ 		}
++		/* priv->fw_version is only valid after mxl862xx_wait_ready(),
++		 * which runs after mxl862xx_setup_pcs() picked the ops.
++		 * Choose them here, where the version is known.
++		 */
++		priv->serdes_ports[port - 9].pcs.ops = &mxl862xx_pcs_ops;
+ 		return &priv->serdes_ports[port - 9].pcs;
+ 	default:
+ 		return NULL;

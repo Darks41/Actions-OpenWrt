@@ -47,10 +47,10 @@ env:
   # capped at 10 GB per repo and expires after 7 days without access, while
   # Release assets have no such expiry.
   CACHE_DL: true                 # store dl/ in the Release below
-  DL_CACHE_TAG: dl-cache         # Release tag that holds the dl/ cache
+  DL_CACHE_TAG: dl-cache-r4pro   # Release tag that holds the dl/ cache
   DL_CACHE_PART_SIZE: 1800M      # must stay below GitHub's 2 GiB/asset limit
   CACHE_CCACHE: true             # store .ccache in the Release below
-  CCACHE_CACHE_TAG: ccache-cache # Release tag that holds the .ccache cache
+  CCACHE_CACHE_TAG: ccache-cache-r4pro # Release tag that holds the .ccache cache
   CCACHE_MAX_SIZE: 6G            # cap for the .ccache directory
   CCACHE_DIR: /workdir/openwrt/.ccache
   CCACHE_CACHE_PART_SIZE: 1800M  # must stay below GitHub's 2 GiB/asset limit

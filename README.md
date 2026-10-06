@@ -27,8 +27,8 @@ A template for building OpenWrt with GitHub Actions
 To shorten the next compilation, each build stores its caches **in this repository
 itself**, so no third-party cache service is involved. Every branch has its own
 pair of **draft** Releases -- `dl-cache` / `ccache-cache` for `snapshot`, the same
-names with a `-lede` / `-ac5s-6.18` suffix for the other branches -- and their
-titles carry the branch and the update time (Beijing time).
+names with a `-lede` / `-ac5s-6.18` / `-r4pro` suffix for the other branches -- and
+their titles carry the branch and the update time (Beijing time).
 
 - Both caches are split into 1800M parts (below GitHub's 2 GiB/asset limit) and
   guarded by a manifest asset (`dl.manifest` / `ccache.manifest`). Parts are
@@ -53,6 +53,35 @@ titles carry the branch and the update time (Beijing time).
 
 **Clearing the cache:** delete that branch's `dl-cache*` and `ccache-cache*`
 Releases. To disable caching, set `CACHE_DL: false` and `CACHE_CCACHE: false`.
+
+## r4pro: 2.5G copper SFP fix for the BPI-R4 Pro 4E
+
+The `r4pro` branch is `snapshot` plus one kernel patch,
+`patches/760-18-net-dsa-mxl862xx-select-pcs-ops-after-fw-probe.patch`, which
+`diy-part2.sh` installs into `target/linux/generic/pending-6.18/` right before
+the build (so it is applied after patch 760-16, the last patch touching that
+driver).
+
+OpenWrt patch 760-05 moved `mxl862xx_setup_pcs()` ahead of
+`mxl862xx_wait_ready()`, so the firmware-version based phylink PCS ops selection
+from patch 760-16 always reads `priv->fw_version == 0` and installs the legacy
+ops even on firmware >= 1.0.84.  The legacy in-band caps for 2500BASE-X only
+allow `LINK_INBAND_DISABLE`, while phylink sets the Autoneg bit for an SFP
+module, so module insertion fails with
+
+```
+mxl862xx mdio-bus:10 sfp-lan: autoneg setting not compatible with PCS
+```
+
+and `sfp-lan` never links (`Module state: error`, `tx_disable: 1`).  The patch
+re-selects the ops in `mxl862xx_phylink_mac_select_pcs()`, which only runs after
+`mxl862xx_wait_ready()` has populated `priv->fw_version`.
+
+Expected result in the boot log after flashing this image:
+
+```
+mxl862xx mdio-bus:10 sfp-lan: switched to inband/2500base-x link mode
+```
 
 ## Credits
 
