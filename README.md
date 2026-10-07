@@ -108,6 +108,31 @@ mxl862xx mdio-bus:10 sfp-lan: Link is Up - 2.5Gbps/Full - flow control rx/tx
 with `ip link show sfp-lan` reporting carrier and the port leaving blocking
 state, without any manual `ethtool -s sfp-lan autoneg off`.
 
+### Build preflight (`preflight.sh`)
+
+The workflow runs `preflight.sh` between `Upload dl directory` and
+`Compile the firmware`, so that a build is not started for patches that are not
+needed any more.  It checks
+
+* the kernel version that is about to be built (`target/linux/generic/kernel-6.18`)
+  against the version the patches were written for (6.18.54) -- an older tree has
+  a different mxl862xx driver and `sfp.c` and must not be patched;
+* whether the pristine sources (from `dl/linux-*.tar.xz`) or the tree's own
+  kernel patch series already contain either fix; if so the corresponding patch
+  is obsolete;
+* whether the patches are present, non-empty, unified diffs and were installed
+  into `target/linux/generic/pending-6.18/` by `diy-part2.sh`;
+* whether they still apply (`make target/linux/prepare V=s -j1`) and whether the
+  fixes really end up in the prepared kernel tree;
+* in case one of them does not, which of the two (or which other file) is at
+  fault.
+
+When the result is "do not build this", `Compile the firmware` and
+`Organize files` are skipped and the reason is printed in the step log, written
+to `preflight-skip-reason.txt`, added to the job summary and repeated by the
+`Report skipped build` step at the very end of the log.  Otherwise the build
+runs exactly as before.
+
 ## Credits
 
 - [Microsoft Azure](https://azure.microsoft.com)

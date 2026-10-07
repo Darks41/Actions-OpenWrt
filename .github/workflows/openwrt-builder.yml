@@ -300,8 +300,20 @@ jobs:
         name: OpenWrt_dl${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: openwrt/dl
 
+    # Before spending three hours on a build, make sure the two out-of-tree
+    # kernel patches on this branch are still needed and still apply to the
+    # upstream sources that were just cloned.  Upstream may fix (or rework)
+    # either problem at any time; when that happens this step skips the build
+    # and says why in the log and in the job summary.
+    - name: Check upstream state and patch applicability
+      id: preflight
+      run: |
+        chmod +x preflight.sh
+        ./preflight.sh
+
     - name: Compile the firmware
       id: compile
+      if: steps.preflight.outputs.skip != 'true'
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
@@ -402,7 +414,7 @@ jobs:
 
     - name: Organize files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: steps.preflight.outputs.skip != 'true' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
@@ -450,3 +462,17 @@ jobs:
         # does not list, so it is never removed by the cleanup below.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # Keep the reason for a skipped build at the very end of the log, so it is
+    # the last thing a reader sees.
+    - name: Report skipped build
+      if: steps.preflight.outputs.skip == 'true'
+      run: |
+        echo "::warning::Firmware build skipped - no firmware was produced for this run."
+        echo "=============================================================="
+        echo " Report skipped build."
+        echo "=============================================================="
+        cat preflight-skip-reason.txt 2>/dev/null || echo "(reason file missing)"
+        echo "See the 'Check upstream state and patch applicability' step and the"
+        echo "job summary above for the full explanation."
+        echo "=============================================================="
