@@ -1,0 +1,42 @@
+From: lwj <lw91411@gmail.com>
+Date: Wed, 7 Oct 2026 09:10:00 +0000
+Subject: [PATCH] net: sfp: add quirk for OEM SFP+XG-T-H 2.5G copper module
+
+The OEM SFP+XG-T-H is a 2.5G copper module which does not perform clause 37
+negotiation on the host side, but it does claim the Autoneg link mode in its
+supported link modes.
+
+phylink therefore selects the in-band AN path (PHYLINK_PCS_NEG_INBAND_ENABLED)
+for the 2500BASE-X link, and phylink_decode_c37_word() only reports the link
+as being up once the link partner advertises 2500baseX/Full in its C37 word.
+As this module never sends a C37 word, the link is reported as down forever
+even though the module itself is linked -- on the BPI-R4 Pro 4E the MxL862xx
+XPCS reports the link in its PCS state ("Main state: link_up" in
+/sys/kernel/debug/sfp1/state), but sfp-lan stays in NO-CARRIER.
+
+Clear the Autoneg bit so that the out-of-band path is used instead:
+phylink_mii_c22_pcs_decode_state() then derives speed and duplex from the
+interface when the PCS reports the link as up, and phylink calls
+pcs_link_up(2500, FULL), which makes the MxL862xx firmware bring the link up.
+
+Signed-off-by: lwj <lw91411@gmail.com>
+---
+ drivers/net/phy/sfp.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+--- a/drivers/net/phy/sfp.c
++++ b/drivers/net/phy/sfp.c
+@@ -584,6 +584,13 @@ static const struct sfp_quirk sfp_quirks[] = {
+ 
+ 	SFP_QUIRK_F("OEM", "SFP-10G-T", sfp_fixup_rollball_cc),
+ 	SFP_QUIRK_S("OEM", "SFP-2.5G-T", sfp_quirk_oem_2_5g),
++	// OEM SFP+XG-T-H is a 2.5G copper module which does not support
++	// clause 37 negotiation on the host side, but it still claims the
++	// Autoneg link mode.  phylink then enables in-band AN for 2500BASE-X
++	// and only reports the link as being up once the link partner's C37
++	// word advertises 2500baseX/Full, which never happens.  Clear the
++	// Autoneg bit so that the out-of-band path is used instead.
++	SFP_QUIRK_S("OEM", "SFP+XG-T-H", sfp_quirk_disable_autoneg),
+ 	SFP_QUIRK_S("OEM", "SFP-2.5G-BX10-D", sfp_quirk_2500basex),
+ 	SFP_QUIRK_S("OEM", "SFP-2.5G-BX10-U", sfp_quirk_2500basex),
+ 	SFP_QUIRK_S("OEM", "SFP-2.5G-LH03-B", sfp_quirk_2500basex),
