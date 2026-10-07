@@ -36,7 +36,9 @@
 # Environment:
 #   SRC              source tree to check          (default: openwrt)
 #   PATCH_DIR        directory holding *.patch     (default: $GITHUB_WORKSPACE/patches)
-#   PATCH_BASE_VERSION  kernel version the patches were written for (default below)
+#   PATCH_BASE_VERSION  kernel version the patches were written for (default
+#                       below); any other tree of the same series is accepted,
+#                       only a different series is refused
 #   GITHUB_OUTPUT    optional, as provided by GitHub Actions
 #   GITHUB_STEP_SUMMARY  optional, as provided by GitHub Actions
 #
@@ -46,12 +48,15 @@ SRC="${SRC:-openwrt}"
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}"
 PATCH_DIR="${PATCH_DIR:-$GITHUB_WORKSPACE/patches}"
 
-# The two patches were written and tested against this kernel version.  An older
-# tree has a different mxl862xx DSA driver (781-04/760-16 select the PCS ops
-# with `pcs->pcs.ops`, the SerDes port lookup still looks different) and a
-# different sfp.c, so patching it is not appropriate - a bad or pointless build
-# must not be produced silently.
+# The two patches were written and tested against this kernel version.  Every
+# tree of the same series (6.18.x) is fine: whether the patches still fit is not
+# guessed from the version but verified below by actually applying them.  A
+# different series has a different mxl862xx DSA driver (781-04/760-16 select the
+# PCS ops with `pcs->pcs.ops`, the SerDes port lookup still looks different) and
+# a different sfp.c, so patching it is not appropriate - a bad or pointless
+# build must not be produced silently.
 PATCH_BASE_VERSION="${PATCH_BASE_VERSION:-6.18.54}"
+PATCH_BASE_SERIES="${PATCH_BASE_VERSION%.*}"
 
 SKIP_REASONS=()
 NOTES=()
@@ -71,13 +76,11 @@ SUFFIX="$(sed -n "s/^LINUX_VERSION-$PATCHVER *= *//p" "$SRC/target/linux/generic
 KV="$PATCHVER$SUFFIX"
 note "==> preflight: target kernel $KV (series $PATCHVER), source tree $SRC"
 
-version_lt() { # is $1 older than $2 ?
-	[ "$1" = "$2" ] && return 1
-	[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]
-}
-
-if version_lt "$KV" "$PATCH_BASE_VERSION"; then
-	add_skip "the sources would build kernel $KV, but these patches were written for $PATCH_BASE_VERSION: an older tree has a different mxl862xx driver and sfp.c, so patching it is not appropriate"
+KV_SERIES="${KV%.*}"
+if [ "$KV_SERIES" != "$PATCH_BASE_SERIES" ]; then
+	add_skip "the sources would build kernel $KV ($KV_SERIES series), but these patches were written for the $PATCH_BASE_SERIES series ($PATCH_BASE_VERSION): a different kernel series has a different mxl862xx driver and sfp.c, so patching it is not appropriate"
+elif [ "$KV" != "$PATCH_BASE_VERSION" ]; then
+	add_note "sources build kernel $KV, the patches were written for $PATCH_BASE_VERSION (same $KV_SERIES series, so this is fine - the patches are applied and checked below)"
 fi
 
 # ---------------------------------------------------------------------------

@@ -114,9 +114,11 @@ The workflow runs `preflight.sh` between `Upload dl directory` and
 `Compile the firmware`, so that a build is not started for patches that are not
 needed any more.  It checks
 
-* the kernel version that is about to be built (`target/linux/generic/kernel-6.18`)
-  against the version the patches were written for (6.18.54) -- an older tree has
-  a different mxl862xx driver and `sfp.c` and must not be patched;
+* the kernel series that is about to be built (`target/linux/generic/kernel-6.18`)
+  against the series the patches were written for (6.18.54, so the whole 6.18.x
+  series is accepted) -- a different series has a different mxl862xx driver and
+  `sfp.c` and must not be patched, while a different patchlevel inside 6.18.x is
+  only reported as a note and settled by the apply check below;
 * whether the pristine sources (from `dl/linux-*.tar.xz`) or the tree's own
   kernel patch series already contain either fix; if so the corresponding patch
   is obsolete;
