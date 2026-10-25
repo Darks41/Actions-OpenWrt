@@ -73,28 +73,28 @@ fi
 # workflow 的 apt 清单里没有 npm；OpenWrt 的 node/host 还会在 Host/Install 里删掉 npm
 # （feeds/packages/lang/node/node/Makefile:254-257），所以把 runner 预装的 Node 22/24
 # 加进后续步骤的 PATH（GITHUB_PATH 会被 prepend），Compile 步骤即可找到 node/npm。
-node_bin=
-for candidate in /opt/hostedtoolcache/node/2[0-9].*/x64/bin; do
-	if [ -x "$candidate/node" ] && [ -x "$candidate/npm" ]; then
-		case "$("$candidate/node" -p 'process.versions.node.split(".")[0]' 2>/dev/null)" in
-		2[0-9]) node_bin=$candidate ;;
-		esac
-	fi
-done
+# node_bin=
+# for candidate in /opt/hostedtoolcache/node/2[0-9].*/x64/bin; do
+# 	if [ -x "$candidate/node" ] && [ -x "$candidate/npm" ]; then
+# 		case "$("$candidate/node" -p 'process.versions.node.split(".")[0]' 2>/dev/null)" in
+# 		2[0-9]) node_bin=$candidate ;;
+# 		esac
+# 	fi
+# done
 
-if [ -n "$node_bin" ]; then
-	export PATH="$node_bin:$PATH"
-	if [ -n "${GITHUB_PATH:-}" ]; then
-		echo "$node_bin" >> "$GITHUB_PATH"
-	fi
-	echo "[diy2] node $(node -v) / npm $(npm -v) from $node_bin"
-elif [ -n "${GITHUB_ACTIONS:-}" ]; then
+# if [ -n "$node_bin" ]; then
+# 	export PATH="$node_bin:$PATH"
+# 	if [ -n "${GITHUB_PATH:-}" ]; then
+# 		echo "$node_bin" >> "$GITHUB_PATH"
+# 	fi
+# 	echo "[diy2] node $(node -v) / npm $(npm -v) from $node_bin"
+# elif [ -n "${GITHUB_ACTIONS:-}" ]; then
 	# 兜底：runner 镜像结构变了就装 NodeSource 22
-	echo "[diy2] WARNING: no Node >= 20 in /opt/hostedtoolcache/node, installing NodeSource 22" >&2
-	curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - || exit 1
-	sudo apt-get install -y nodejs || exit 1
-	command -v node >/dev/null && command -v npm >/dev/null || { echo "[diy2] ERROR: node/npm still missing" >&2; exit 1; }
-	echo "[diy2] node $(node -v) / npm $(npm -v)"
-else
-	echo "[diy2] WARNING: no Node >= 20 found and not running in GitHub Actions, skip" >&2
-fi
+# 	echo "[diy2] WARNING: no Node >= 20 in /opt/hostedtoolcache/node, installing NodeSource 22" >&2
+# 	curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - || exit 1
+# 	sudo apt-get install -y nodejs || exit 1
+# 	command -v node >/dev/null && command -v npm >/dev/null || { echo "[diy2] ERROR: node/npm still missing" >&2; exit 1; }
+# 	echo "[diy2] node $(node -v) / npm $(npm -v)"
+# else
+# 	echo "[diy2] WARNING: no Node >= 20 found and not running in GitHub Actions, skip" >&2
+# fi
