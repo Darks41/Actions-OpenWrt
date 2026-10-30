@@ -241,7 +241,9 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Save package cache (dl)
-      if: env.CACHE_DL == 'true' && steps.package.outputs.status == 'success'
+      # Only a complete `make download` is worth caching: a partial dl/ would be
+      # restored by the next build and silently poison it.
+      if: env.CACHE_DL == 'true' && steps.package.outcome == 'success' && steps.package.outputs.status == 'success'
       working-directory: /workdir/openwrt
       env:
         GH_TOKEN: ${{ env.CACHE_TOKEN }}
@@ -320,10 +322,10 @@ jobs:
       run: ccache -d /workdir/openwrt/.ccache -s || true
 
     - name: Save ccache
-      # Run even when the compile failed (a partial cache still helps next time),
-      # but never when the compile never started: there would be nothing worth
-      # saving and the assets below would be replaced by an empty cache.
-      if: always() && env.CACHE_CCACHE == 'true' && steps.compile.outcome != 'skipped'
+      # Only a fully successful build is worth caching. A build that failed (or
+      # that a preflight skipped) stops somewhere in the middle, so its .ccache
+      # would replace a good cache with a strictly worse one.
+      if: env.CACHE_CCACHE == 'true' && steps.compile.outcome == 'success'
       working-directory: /workdir/openwrt
       env:
         GH_TOKEN: ${{ env.CACHE_TOKEN }}
