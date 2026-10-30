@@ -1,0 +1,15 @@
+#!/bin/sh
+#
+# Point luci-app-ghfu at the repository that publishes the firmware.
+#
+# The package's own 99-ghfu-defaults only fills in the shipped defaults when
+# the config section is missing, so it does not override anything; this runs
+# after it (same "99" prefix, alphabetically later) and always wins.
+#
+[ -x /sbin/uci ] || exit 0
+uci -q set ghfu.main.github_repo='Darks41/Actions-OpenWrt'
+uci -q set ghfu.main.filter_ext_enabled='1'
+uci -q set ghfu.main.valid_extensions='.img .img.gz .bin .tar .itb .trx .chk .dlf .ari'
+uci -q set ghfu.main.fetch_timeout='15'
+uci -q commit ghfu
+exit 0
