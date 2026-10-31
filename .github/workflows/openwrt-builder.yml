@@ -467,7 +467,21 @@ jobs:
         # Table: keep every row that is not this branch's, then add the fresh one.
         rm -rf /tmp/rel && mkdir -p /tmp/rel
         gh release view "$RELEASE_TAG" --json body -q .body > /tmp/rel/body.md 2>/dev/null || : > /tmp/rel/body.md
-        grep -E '^\| ' /tmp/rel/body.md | grep -vE '^\| (Branch|---) ' | grep -vF "| ${BRANCH} |" > /tmp/rel/old.rows || true
+        # Keep the other branches' rows, but drop any row that describes a file
+        # we are about to overwrite: snapshot and r4pro build the same device, so
+        # they share one image name and only the newest row may survive.
+        NAMES=""
+        for f in $IMGS; do NAMES="$NAMES $(basename "$f")"; done
+        awk -F'|' -v br="$BRANCH" -v names="$NAMES" '
+          BEGIN { n = split(names, a, " ") }
+          /^\| / {
+            b = $2; f = $4
+            gsub(/^ +| +$/, "", b); gsub(/^ +| +$/, "", f)
+            if (b == "Branch" || b == "---") next
+            if (b == br) next
+            for (i = 1; i <= n; i++) if (f == a[i]) next
+            print
+          }' /tmp/rel/body.md > /tmp/rel/old.rows || true
         : > /tmp/rel/new.rows
         for f in $IMGS; do
           printf '| %s | %s | %s | %s | %s | `%s` | %s |\n' \
