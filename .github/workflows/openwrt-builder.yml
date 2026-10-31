@@ -418,74 +418,76 @@ jobs:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
-    - name: Generate release tag
-      id: tag
-      # Only publish when a firmware image was actually produced.
+    - name: Publish firmware release
+      # One shared, always-published release holds the newest squashfs-sysupgrade
+      # image of every branch. A build replaces only its own image and its own row
+      # in the table, so the other branches' images and build times survive.
+      # snapshot and r4pro build the same device, so they share one image slot.
       if: env.UPLOAD_RELEASE == 'true' && steps.organize.outputs.status == 'success' && steps.compile.outcome == 'success' && !cancelled()
-      run: |
-        echo "release_tag=${GITHUB_REF_NAME}-$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
-        {
-          echo "**${{ github.ref_name }}** firmware build"
-          echo
-          echo "| | |"
-          echo "| --- | --- |"
-          echo "| Branch | \`${{ github.ref_name }}\` |"
-          echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
-          echo "| Device | \`${DEVICE_NAME#_}\` |"
-          echo "| Built | $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M UTC+8') |"
-          echo "| Run | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
-          echo
-          echo "Releases are kept per branch, one each: the tag is prefixed with"
-          echo "the branch name, and \`luci-app-ghfu\` can pin it via \`selected_release\`."
-        } > release.txt
-        cat release.txt
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: Upload firmware to release
-      uses: softprops/action-gh-release@master
-      if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        name: ${{ steps.tag.outputs.release_tag }}
-        body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
-        # Must be published: luci-app-ghfu reads /releases/latest, which ignores
-        # drafts and pre-releases.
-        draft: false
-        prerelease: false
-        make_latest: true
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RELEASE_TAG: firmware
+        RELEASE_TITLE: OpenWrt firmware images
+      run: |
+        set -e
+        BRANCH="${GITHUB_REF_NAME}"
+        DEVICE="${DEVICE_NAME#_}"
+        NOW="$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M UTC+8')"
+        RUN="[#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+        # Only the squashfs sysupgrade image goes in: its suffix
+        # (.itb / .bin / .img.gz) is what lets luci-app-ghfu's extension filter
+        # show every device exactly its own file.
+        IMGS="$(find "$FIRMWARE" -maxdepth 1 -type f -name '*squashfs-sysupgrade*' | sort)"
+        if [ -z "$IMGS" ]; then
+          echo "::warning::no *squashfs-sysupgrade* image under $FIRMWARE; nothing to publish."
+          exit 0
+        fi
+        echo "Publishing:"; echo "$IMGS"
+
+        gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+          gh release create "$RELEASE_TAG" --title "$RELEASE_TITLE" \
+            --notes "firmware images" --latest
+
+        # Replace only this branch's image; the other branches' assets stay.
+        gh release upload "$RELEASE_TAG" $IMGS --clobber
+
+        # Table: keep every row that is not this branch's, then add the fresh one.
+        rm -rf /tmp/rel && mkdir -p /tmp/rel
+        gh release view "$RELEASE_TAG" --json body -q .body > /tmp/rel/body.md 2>/dev/null || : > /tmp/rel/body.md
+        grep -E '^\| ' /tmp/rel/body.md | grep -vE '^\| (Branch|---) ' | grep -vF "| ${BRANCH} |" > /tmp/rel/old.rows || true
+        : > /tmp/rel/new.rows
+        for f in $IMGS; do
+          printf '| %s | %s | %s | %s | %s | `%s` | %s |\n' \
+            "$BRANCH" "$DEVICE" "$(basename "$f")" "$(du -h "$f" | cut -f1)" \
+            "$NOW" "$(sha256sum "$f" | cut -d' ' -f1)" "$RUN" >> /tmp/rel/new.rows
+        done
+        {
+          echo "Firmware images for every branch. Each build uploads only its own"
+          echo "\`*squashfs-sysupgrade*\` image and refreshes only its own row, so the"
+          echo "images and timestamps of the other branches stay as they were."
+          echo
+          echo "| Branch | Device | File | Size | Built | sha256 | Run |"
+          echo "| --- | --- | --- | --- | --- | --- | --- |"
+          cat /tmp/rel/old.rows /tmp/rel/new.rows | sort
+        } > /tmp/rel/body.md.new
+        gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes-file /tmp/rel/body.md.new
+        echo "----- release body -----"
+        cat /tmp/rel/body.md.new
+
+        # Invariant of this repository: exactly ONE published release.
+        gh api "/repos/${{ github.repository }}/releases?per_page=100" \
+          -q '.[] | select(.draft == false) | .tag_name' \
+          | while read -r tag; do
+              [ -z "$tag" ] && continue
+              [ "$tag" = "$RELEASE_TAG" ] && continue
+              echo "Deleting extra release: $tag"
+              gh release delete "$tag" --yes --cleanup-tag \
+                || echo "::warning::could not delete release $tag"
+            done
 
     # NOTE: the P3TERX template ends with a "Delete workflow runs" step
     # (Mattraks/delete-workflow-runs with retain_days: 0, keep_minimum_runs: 2).
     # It was removed on purpose: it wiped all but the two newest runs after
     # every build, and deleting a run also deletes its firmware artifacts.
-    # Run history and artifacts are now kept; clean them up manually.
-    - name: Remove older firmware releases
-      # One *firmware* release is kept PER BRANCH: the tag is prefixed with
-      # the branch name, so only releases of the same branch are pruned here
-      # and every other branch keeps its own newest firmware. The dl/ and
-      # ccache caches live in separate **draft** releases, which are never
-      # touched here (and are invisible to /releases/latest anyway).
-      if: env.UPLOAD_RELEASE == 'true' && steps.tag.outputs.status == 'success' && steps.compile.outcome == 'success' && !cancelled()
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        KEEP_TAG: ${{ steps.tag.outputs.release_tag }}
-      run: |
-        set -e
-        gh api "/repos/${{ github.repository }}/releases?per_page=100" \
-          -q '.[] | select(.draft == false) | .tag_name' \
-          | while read -r tag; do
-              [ -z "$tag" ] && continue
-              # Only prune releases that belong to this branch (tag prefix).
-              case "$tag" in
-                "${GITHUB_REF_NAME}-"*) ;;
-                *) continue ;;
-              esac
-              [ "$tag" = "$KEEP_TAG" ] && continue
-              echo "Deleting older release of this branch: $tag"
-              gh release delete "$tag" --yes --cleanup-tag \
-                || echo "::warning::could not delete release $tag"
-            done
-        echo "Kept one release for this branch: $KEEP_TAG"
+    # Run history and artifacts are kept; clean them up manually.
