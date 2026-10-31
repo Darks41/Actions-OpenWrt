@@ -416,7 +416,7 @@ jobs:
 
     - name: Organize files
       id: organize
-      if: steps.preflight.outputs.skip != 'true' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: steps.preflight.outputs.skip != 'true' && env.UPLOAD_FIRMWARE == 'true' && steps.compile.outcome == 'success' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
@@ -433,7 +433,7 @@ jobs:
     - name: Generate release tag
       id: tag
       # Only publish when a firmware image was actually produced.
-      if: env.UPLOAD_RELEASE == 'true' && steps.organize.outputs.status == 'success' && !cancelled()
+      if: env.UPLOAD_RELEASE == 'true' && steps.organize.outputs.status == 'success' && steps.compile.outcome == 'success' && !cancelled()
       run: |
         echo "release_tag=$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
         {
@@ -478,7 +478,7 @@ jobs:
       # every other published release is deleted. The dl/ and ccache caches
       # live in separate **draft** releases, which are never touched here and
       # are invisible to /releases/latest anyway.
-      if: env.UPLOAD_RELEASE == 'true' && steps.tag.outputs.status == 'success' && !cancelled()
+      if: env.UPLOAD_RELEASE == 'true' && steps.tag.outputs.status == 'success' && steps.compile.outcome == 'success' && !cancelled()
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         KEEP_TAG: ${{ steps.tag.outputs.release_tag }}
