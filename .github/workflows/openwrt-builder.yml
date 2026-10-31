@@ -497,7 +497,11 @@ jobs:
           echo "| --- | --- | --- | --- | --- | --- | --- |"
           cat /tmp/rel/old.rows /tmp/rel/new.rows | sort
         } > /tmp/rel/body.md.new
-        gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes-file /tmp/rel/body.md.new
+        # A release's published_at cannot be changed through the API, so the date
+        # shown on the releases page is stuck at creation time. Put the newest
+        # build time of the table into the title instead.
+        LATEST="$(cat /tmp/rel/old.rows /tmp/rel/new.rows | awk -F'|' '{gsub(/^ +| +$/, "", $6); print $6}' | sort | tail -1)"
+        gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE - $LATEST" --notes-file /tmp/rel/body.md.new
         echo "----- release body -----"
         cat /tmp/rel/body.md.new
 
