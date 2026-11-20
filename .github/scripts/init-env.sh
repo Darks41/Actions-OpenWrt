@@ -191,39 +191,35 @@ add_mirror http://ftp.ubuntu.com/ubuntu
 
 WORK_LOG=$(mktemp -d)
 PROBE_FILE=$(mktemp)
+SEC_FILE=$(mktemp)
+
+# A 1 MiB metadata file is usually served from a mirror cache and says little
+# about sustained throughput: on 2026-11-20 azure probed fastest at 2.6 MB/s
+# and then delivered 200-600 kB/s during the actual download.  Sample 8 MiB of
+# the much larger Contents index instead, and fall back to the Packages index
+# only for mirrors that do not publish it, so the ranking reflects the speed
+# the download will actually see.
 probe_one() { # <mirror>
   local mirror=$1 speed
-  speed=$(curl -fsSL --max-time 15 --range 0-1048575 -o /dev/null \
+  speed=$(curl -fsSL --max-time 25 --range 0-8388607 -o /dev/null \
     -w '%{speed_download}' \
-    "$mirror/dists/noble/main/binary-amd64/Packages.gz" 2>/dev/null) || speed=0
+    "$mirror/dists/noble/Contents-amd64.gz" 2>/dev/null) || speed=0
   speed=${speed%.*}
   [[ $speed =~ ^[0-9]+$ ]] || speed=0
+  if ((speed == 0)); then
+    speed=$(curl -fsSL --max-time 15 --range 0-1048575 -o /dev/null \
+      -w '%{speed_download}' \
+      "$mirror/dists/noble/main/binary-amd64/Packages.gz" 2>/dev/null) || speed=0
+    speed=${speed%.*}
+    [[ $speed =~ ^[0-9]+$ ]] || speed=0
+  fi
   printf '%s\t%s\n' "$speed" "$mirror" >>"$PROBE_FILE"
 }
-
-say "probing ${#MIRRORS[@]} Ubuntu mirrors (noble/main Packages.gz, 1 MiB) in parallel"
-for m in "${MIRRORS[@]}"; do probe_one "$m" & done
-wait
-mapfile -t RANKED < <(sort -rn "$PROBE_FILE" | cut -f2)
-if [[ ${#RANKED[@]} -eq 0 ]]; then
-  warn "mirror probe returned nothing; keeping the runner's own sources"
-  RANKED=("$(current_mirror)")
-fi
-while IFS=$'\t' read -r speed mirror; do
-  printf '  %7s KiB/s  %s\n' "$((speed / 1024))" "$mirror"
-done < <(sort -rn "$PROBE_FILE")
-BEST=${RANKED[0]}
-BEST_SPEED=$(awk -F'\t' -v m="$BEST" '$2==m{print $1}' "$PROBE_FILE" | head -n1)
-BEST_SPEED=${BEST_SPEED:-0}
-if ((BEST_SPEED < 200000)); then
-  warn "fastest mirror is only $((BEST_SPEED / 1024)) KiB/s; downloads may be slow"
-fi
 
 # noble-security lives on a different host for some mirrors and on the same
 # archive for others.  Find one that answers *before* writing sources: pointing
 # apt at a dead security host costs ~100 s of connect timeouts per update
 # (2026-11-19: security.ubuntu.com was dead and apt still reported success).
-SEC_FILE=$(mktemp)
 probe_sec() { # <mirror>
   local mirror=$1
   if curl -fsS --max-time 10 -o /dev/null "$mirror/dists/noble-security/Release" 2>/dev/null; then
@@ -231,21 +227,49 @@ probe_sec() { # <mirror>
   fi
 }
 
-say "checking which mirrors carry noble-security"
-for m in "${RANKED[@]}"; do probe_sec "$m" & done
-wait
-SEC_MIRROR=
-for m in "${RANKED[@]}"; do
-  if grep -qxF "$m" "$SEC_FILE" 2>/dev/null; then
-    SEC_MIRROR=$m
-    break
+# Rank every candidate by measured throughput and pick the security host that
+# actually answers.  Called once at the start, and again whenever a download
+# slice runs out of time on the mirror we picked.
+probe_rank() {
+  local speed mirror m
+  : >"$PROBE_FILE"
+  : >"$SEC_FILE"
+  say "probing ${#MIRRORS[@]} Ubuntu mirrors (8 MiB of noble/Contents-amd64.gz) in parallel"
+  for m in "${MIRRORS[@]}"; do probe_one "$m" & done
+  wait
+  mapfile -t RANKED < <(sort -rn "$PROBE_FILE" | cut -f2)
+  if [[ ${#RANKED[@]} -eq 0 ]]; then
+    warn "mirror probe returned nothing; keeping the runner's own sources"
+    RANKED=("$(current_mirror)")
   fi
-done
-if [[ -n $SEC_MIRROR ]]; then
-  say "security pocket will come from $SEC_MIRROR"
-else
-  warn "no probed mirror carries noble-security; dropping that pocket from the sources"
-fi
+  while IFS=$'\t' read -r speed mirror; do
+    printf '  %7s KiB/s  %s\n' "$((speed / 1024))" "$mirror"
+  done < <(sort -rn "$PROBE_FILE")
+  BEST=${RANKED[0]}
+  BEST_SPEED=$(awk -F'\t' -v m="$BEST" '$2==m{print $1}' "$PROBE_FILE" | head -n1)
+  BEST_SPEED=${BEST_SPEED:-0}
+  if ((BEST_SPEED < 200000)); then
+    warn "fastest mirror is only $((BEST_SPEED / 1024)) KiB/s; downloads may be slow"
+  fi
+
+  say "checking which mirrors carry noble-security"
+  for m in "${RANKED[@]}"; do probe_sec "$m" & done
+  wait
+  SEC_MIRROR=
+  for m in "${RANKED[@]}"; do
+    if grep -qxF "$m" "$SEC_FILE" 2>/dev/null; then
+      SEC_MIRROR=$m
+      break
+    fi
+  done
+  if [[ -n $SEC_MIRROR ]]; then
+    say "security pocket will come from $SEC_MIRROR"
+  else
+    warn "no probed mirror carries noble-security; dropping that pocket from the sources"
+  fi
+}
+
+probe_rank
 
 write_sources() { # <mirror> [security-mirror]
   local main=$1 sec=${2:-}
@@ -291,6 +315,27 @@ update_on() { # <mirror>
   return "$rc"
 }
 
+# A slice that runs out of time means the mirror we picked cannot keep up.
+# Probe again and move to a different one: apt resumes from partial/, so the
+# bytes already fetched are kept.  This is the difference between waiting out a
+# slow evening mirror (2026-11-20: three 300 s slices with almost no progress)
+# and switching to one that is fast right now.
+switch_mirror() {
+  local cur pick m
+  cur=$(current_mirror)
+  probe_rank
+  pick=
+  for m in "${RANKED[@]}"; do
+    [[ $m == "$cur" ]] && continue
+    pick=$m
+    break
+  done
+  [[ -n $pick ]] || pick=$BEST
+  say "switching $cur -> $pick after a slow slice"
+  update_on "$pick" || { warn "apt-get update via $pick failed"; return 1; }
+  return 0
+}
+
 UPDATED=0
 CLEAN=0
 for m in "${RANKED[@]:0:3}"; do
@@ -321,17 +366,26 @@ if ((${#MISSING[@]} == 0)); then
   say "nothing to install"
 else
   DL_OK=0
+  SWITCHES=0
   for slice in $(seq 1 8); do
     left=$(budget_left)
     if ((left < 120)); then
       fatal "out of time before the download finished ($(du -sh /var/cache/apt/archives/partial 2>/dev/null | cut -f1) cached)"
     fi
     limit=$((left < 300 ? left : 300))
-    if run_apt "$limit" "download slice $slice" -y install --download-only "${MISSING[@]}"; then
+    run_apt "$limit" "download slice $slice" -y install --download-only "${MISSING[@]}"
+    rc=$?
+    if ((rc == 0)); then
       DL_OK=1
       break
     fi
-    warn "download slice $slice stopped early; partial files are kept for the next slice"
+    warn "download slice $slice stopped early (rc=$rc); partial files are kept for the next slice"
+    # 124 is `timeout`: the mirror is too slow right now, not broken.  Try a
+    # different one before spending another full slice on it.
+    if ((rc == 124 && SWITCHES < 2)); then
+      SWITCHES=$((SWITCHES + 1))
+      switch_mirror || warn "keeping the current mirror"
+    fi
   done
   ((DL_OK)) || fatal "package download did not finish within the ${BUDGET}s budget"
 
