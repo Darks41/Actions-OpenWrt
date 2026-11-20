@@ -206,13 +206,15 @@ jobs:
 
     - name: Download package
       id: package
-      run: |
-        cd openwrt
-        make defconfig
-        make download -j8
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
-        echo "status=success" >> $GITHUB_OUTPUT
+      timeout-minutes: 45
+      env:
+        # download.pl appends this to its curl command line, so later options
+        # win over the built-in `--retry 3`. A transfer is given up only after
+        # 90 s below 4 KB/s: a working mirror, however slow, is never cut off.
+        CURL_OPTIONS: "--retry 5 --retry-delay 5 --retry-connrefused --speed-time 90 --speed-limit 4096"
+        GIT_HTTP_LOW_SPEED_LIMIT: "4096"
+        GIT_HTTP_LOW_SPEED_TIME: "90"
+      run: bash .github/scripts/download-packages.sh
 
     - name: Save package cache (dl)
       # Only a complete `make download` is worth caching: a partial dl/ would be
