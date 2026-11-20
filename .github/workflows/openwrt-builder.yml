@@ -72,14 +72,8 @@ jobs:
       uses: actions/checkout@main
 
     - name: Free space
-      uses: Darks41/free-disk-space@ubuntu-24.04
-      with:
-        tool-cache: true
-        android: true
-        dotnet: true
-        haskell: true
-        large-packages: true
-        swap-storage: true
+      timeout-minutes: 20
+      run: bash .github/scripts/free-space.sh
 
     - name: Initialization environment
       timeout-minutes: 45
