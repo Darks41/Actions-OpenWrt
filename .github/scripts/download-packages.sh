@@ -19,8 +19,11 @@
 #     so a retry resumes instead of starting over; the step fails with an
 #     explicit ::error:: only when the budget is gone.
 #   * makes stalls visible. Every line is timestamped and a heartbeat prints
-#     the size, file count and newest file of dl/ every 30 s, so the next
-#     stall names itself instead of costing an hour of guesswork.
+#     dl/ and tmp/dl sizes plus the number of live curl/git processes every
+#     30 s, so the next stall names itself instead of costing an hour of
+#     guesswork. The first attempt runs make with V=w (stderr passes through,
+#     which is where download.pl prints "+ curl ..."); retries run V=s so the
+#     full command trace is in the log when the first attempt did not finish.
 #
 # Knobs (all optional):
 #   DOWNLOAD_DIR            source tree to download for   (openwrt)
@@ -55,14 +58,18 @@ stamp_stream() {
   perl -pe 'BEGIN { $| = 1 } my @t = gmtime; $_ = sprintf("%02d:%02d:%02d %s", $t[2], $t[1], $t[0], $_)'
 }
 
+# git based download methods clone into tmp/dl and only move the finished
+# tarball into dl/ at the end, so dl/ alone can look frozen while a clone is
+# running; the staging size and the live process counts show that work.
+staging_size() { [[ -d tmp/dl ]] && du -sh tmp/dl 2>/dev/null | cut -f1 || echo '-'; }
+procs() { local n; n=$(pgrep -c -x "$1" 2>/dev/null) || n=0; echo "${n:-0}"; }
+
 heartbeat() {
-  local size files newest
+  local newest
   while sleep "$HB"; do
-    size=$(du -sh "$DL" 2>/dev/null | cut -f1)
-    files=$(find "$DL" -type f 2>/dev/null | wc -l)
     newest=$(ls -t "$DL" 2>/dev/null | head -1)
-    printf '%s [heartbeat] dl/ %s, %s files, newest: %s\n' \
-      "$(now)" "${size:-?}" "$files" "${newest:-none}"
+    printf '%s [heartbeat] dl/ %s (%s files), staging %s, curl=%s git=%s, newest: %s\n' \
+      "$(now)" "$(dl_size)" "$(dl_count)" "$(staging_size)" "$(procs curl)" "$(procs git)" "${newest:-none}"
   done
 }
 
@@ -74,9 +81,9 @@ dl_count() { find "$DL" -type f 2>/dev/null | wc -l; }
 # whole process group can be killed on timeout -- `timeout` would only signal
 # make itself, leaving orphaned curl/git children writing into dl/ while the
 # next attempt starts. Returns 124 when the slice expired.
-run_slice() { # <seconds>
-  local limit=$1 pid state deadline
-  setsid bash -c "exec make download -j$JOBS" &
+run_slice() { # <seconds> [verbosity]
+  local limit=$1 vopt=${2:-w} pid state deadline
+  setsid bash -c "exec make download -j$JOBS V=$vopt" &
   pid=$!
   deadline=$(( $(date +%s) + limit ))
   while :; do
@@ -137,8 +144,12 @@ while (( attempt < ATTEMPTS )); do
     break
   fi
   limit=$((left < ATTEMPT_LIMIT ? left : ATTEMPT_LIMIT))
-  log "download attempt $attempt/$ATTEMPTS (slice ${limit}s, budget left ${left}s, dl/ $(dl_size), $(dl_count) files)"
-  run_slice "$limit" 2>&1 | stamp_stream
+  # Only stderr (where download.pl prints "+ curl ...") on the first attempt;
+  # a retry means the first one did not finish, so keep the full trace.
+  vopt=w
+  (( attempt > 1 )) && vopt=s
+  log "download attempt $attempt/$ATTEMPTS (slice ${limit}s, V=$vopt, budget left ${left}s, dl/ $(dl_size), $(dl_count) files)"
+  run_slice "$limit" "$vopt" 2>&1 | stamp_stream
   rc=${PIPESTATUS[0]}
   if (( rc == 0 )); then
     ok=1
