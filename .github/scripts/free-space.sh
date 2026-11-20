@@ -74,21 +74,37 @@ bg_rm() { # <label> <seconds> <path>...
   (rm_paths "$label" "$secs" "$@") &
 }
 
-# The Android tree is one huge directory: hand its top-level entries to a
-# small worker pool instead of one `rm -rf` that cannot use more than one
-# CPU/queue.
+# The big trees (android, dotnet, tool cache) are handed to a small worker
+# pool instead of one `rm -rf` that cannot use more than one CPU/queue.  A tree
+# with a single top-level entry -- android/sdk is the common case, 12-14 GiB
+# behind one directory -- is split one level deeper first, otherwise the pool
+# would still have exactly one job.
 bg_rm_children() { # <label> <dir> <seconds>
-  local label=$1 dir=$2 secs=$3 t0=$SECONDS n=0
+  local label=$1 dir=$2 secs=$3
   (
-    if [[ -d $dir ]]; then
-      while IFS= read -r -d '' child; do
-        (rm_paths "$label/$(basename "$child")" "$secs" "$child") &
+    local target=$dir depth=0 kid n=0
+    local -a kids=()
+    while :; do
+      mapfile -d '' -t kids < <(find "$target" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+      if ((${#kids[@]} == 1 && depth < 2)) && [[ -d ${kids[0]} ]]; then
+        target=${kids[0]}
+        depth=$((depth + 1))
+        continue
+      fi
+      break
+    done
+    if ((${#kids[@]} == 0)); then
+      rm_paths "$label" "$secs" "$target"
+    else
+      for kid in "${kids[@]}"; do
+        (rm_paths "$label/${kid#"$dir"/}" "$secs" "$kid") &
         n=$((n + 1))
         ((n % 8 == 0)) && wait -n
-      done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+      done
       wait
-      run_root rmdir -- "$dir" 2>/dev/null || true
     fi
+    # Remove what is left of the skeleton (empty directories, a few files).
+    run_root timeout -k 10 60 rm -rf -- "$dir" 2>/dev/null || true
   ) &
 }
 
@@ -147,7 +163,7 @@ fi
 
 # 4. The SDK/runtime trees. Same set as the action we replace.
 bg_rm_children "rm android" "$PREFIX/usr/local/lib/android" 240
-bg_rm "rm dotnet" 120 "$PREFIX/usr/share/dotnet"
+bg_rm_children "rm dotnet" "$PREFIX/usr/share/dotnet" 120
 bg_rm "rm haskell" 120 "$PREFIX/opt/ghc" "$PREFIX/usr/local/.ghcup"
 bg_rm "rm browsers" 120 \
   "$PREFIX/usr/local/share/chromium" \
@@ -162,7 +178,7 @@ bg_rm "rm java/rust caches" 120 \
   "$PREFIX/root/.cache/pip" "$PREFIX/root/.cache/npm" "$PREFIX/root/.cache/pipenv" \
   "$PREFIX/home/linuxbrew/.cache/Homebrew"
 TOOLCACHE=${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}
-bg_rm "rm tool cache" 240 "$PREFIX$TOOLCACHE"
+bg_rm_children "rm tool cache" "$PREFIX$TOOLCACHE" 240
 
 # 5. Packages, in a single transaction (remove + orphan sweep).
 if [[ ${FS_SKIP_APT:-0} == 1 ]]; then
