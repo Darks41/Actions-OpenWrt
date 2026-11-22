@@ -58,6 +58,19 @@ run_root() {
   if [[ -n $SUDO ]]; then $SUDO -E "$@"; else "$@"; fi
 }
 
+# The same branch on the same runner image has taken 40 and 100 minutes for the
+# *same* 244 package targets, so record the machine we actually got.  The
+# Compile step prints its own thread count; this line names the CPU.
+host_info() {
+  local cpu cores mem disk
+  cpu=$(LC_ALL=C lscpu 2>/dev/null | awk -F': +' '/^Model name/{print $2; exit}')
+  cores=$(nproc 2>/dev/null)
+  mem=$(awk '/^MemTotal/{printf "%.0fG", $2/1048576}' /proc/meminfo 2>/dev/null)
+  disk=$(LC_ALL=C lsblk -dno NAME,MODEL 2>/dev/null | head -n1 | awk '{$1=""; sub(/^ /, ""); print}')
+  printf 'cpu=%s cores=%s mem=%s disk=%s' "${cpu:-?}" "${cores:-?}" "${mem:-?}" "${disk:-?}"
+}
+say "host: $(host_info)"
+
 APT_OPTS=(
   -o Acquire::ForceIPv4=true
   -o Acquire::Retries=2
