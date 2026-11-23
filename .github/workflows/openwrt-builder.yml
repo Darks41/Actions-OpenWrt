@@ -51,7 +51,7 @@ env:
   DL_CACHE_PART_SIZE: 1800M      # must stay below GitHub's 2 GiB/asset limit
   CACHE_CCACHE: true             # store .ccache in the Release below
   CCACHE_CACHE_TAG: ccache-cache-ac5s-6.18 # Release tag that holds the .ccache cache
-  CCACHE_MAX_SIZE: 10G           # cap for the .ccache directory
+  CCACHE_MAX_SIZE: 14G           # cap for the .ccache directory
   CCACHE_DIR: /workdir/openwrt/.ccache
   CCACHE_CACHE_PART_SIZE: 1800M  # must stay below GitHub's 2 GiB/asset limit
   # Optional: add a `CACHE_TOKEN` repo secret (classic PAT, `repo` scope) if
